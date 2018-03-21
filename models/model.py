@@ -71,7 +71,7 @@ class EncoderRNN(nn.Module):
         outputs = []
         for i in range(imgH): # imgSeq height
             pos = Variable(torch.LongTensor(
-                [i] * img_feats.size(0)), requires_grad=False).zero_().cuda().contiguous()  # batch * (num_layer * 2) * hidden_dim
+                [i] * img_feats.size(0)).zero_(), requires_grad=False).cuda().contiguous()  # batch * (num_layer * 2) * hidden_dim
             # (num_layer * 2) * batch * hidden_dim
             pos_embedding = self.pos_embedding(
                 pos).view(-1, 2 * self.n_layers, self.encoder_num_hidden).transpose(0, 1).contiguous()
@@ -128,7 +128,7 @@ class AttentionDecoder(nn.Module):
 
             xt = self.embed(it) # batch * embedding_dim
             output, state = self.core(xt, cnn_feats, state)
-            output = F.log_softmax(self.logit(output), dim=1) # batch * vocab_size
+            output = F.log_softmax(self.logit(output)) # batch * vocab_size
             outputs.append(output)
 
         return torch.cat([_.unsqueeze(1) for _ in outputs], 1)
@@ -142,14 +142,14 @@ class AttentionDecoder(nn.Module):
 
         #  (1) run the encoder on the src
 
-        context = context.transpose(0, 1)  # Make things sequence first.
+        # context = context.transpose(0, 1)  # Make things sequence first.
 
         # Expand tensors for each beam.
-        context = Variable(context.data.repeat(1, beam_size, 1))
-        dec_states = [
+        context = Variable(context.data.repeat(beam_size, 1, 1))
+        dec_states = (
             Variable(state_h.data.repeat(1, beam_size, 1)),
             Variable(state_c.data.repeat(1, beam_size, 1))
-        ]
+        )
 
         beam = [
             Beam(beam_size, self.vocab, cuda=True)
@@ -170,12 +170,12 @@ class AttentionDecoder(nn.Module):
             trg_h, (trg_h_t, trg_c_t) = self.core(
                 trg_emb,
                 context,
-                (dec_states[0].squeeze(0), dec_states[1].squeeze(0))
+                dec_states
             )
 
-            dec_states = (trg_h_t.unsqueeze(0), trg_c_t.unsqueeze(0))
+            dec_states = (trg_h_t, trg_c_t)
 
-            dec_out = trg_h_t.squeeze(1)
+            dec_out = trg_h.squeeze(1)
             out = F.softmax(self.output_projector(dec_out)).unsqueeze(0)
 
             word_lk = out.view(
@@ -217,7 +217,7 @@ class AttentionDecoder(nn.Module):
                 # select only the remaining active sentences
                 view = t.data.view(
                     -1, remaining_sents,
-                    self.model.decoder.hidden_size
+                    self.decoder_num_hidden
                 )
                 new_size = list(t.size())
                 new_size[-2] = new_size[-2] * len(active_idx) \
@@ -231,7 +231,7 @@ class AttentionDecoder(nn.Module):
                 update_active(dec_states[1])
             )
             dec_out = update_active(dec_out)
-            context = update_active(context)
+            context = update_active(context.transpose(0, 1).contiguous()).transpose(0, 1)
 
             remaining_sents = len(active)
 
@@ -244,10 +244,10 @@ class AttentionDecoder(nn.Module):
             scores, ks = beam[b].sort_best()
 
             allScores += [scores[:n_best]]
-            hyps = list(zip(*[beam[b].get_hyp(k) for k in ks[:n_best]]))
+            hyps = [beam[b].get_hyp(k) for k in ks[:n_best]][0]
             allHyp += [hyps]
 
-        return allHyp, allScores
+        return torch.Tensor(allHyp), allScores
 
 
 
@@ -284,10 +284,10 @@ class UI2codeAttention(nn.Module):
         top_h= hs[-1]
         mapped_h = self.hidden_mapping(top_h) ## batch * num_hidden
         attn = torch.bmm(context, mapped_h.unsqueeze(2)) ## batch * len(feature) * 1
-        attn_weight = F.softmax(attn.squeeze(), dim=1) ## batch * len(feature)
+        attn_weight = F.softmax(attn.squeeze()) ## batch * len(feature)
         context_combined = torch.bmm(attn_weight.unsqueeze(1), context).squeeze() ## batch * num_hidden
         context_output = self.output_mapping(torch.cat([context_combined, top_h], 1))
-        return context_output, (hs, cs)
+        return context_output, (torch.stack(hs).contiguous(), torch.stack(cs).contiguous())
 
         
         
