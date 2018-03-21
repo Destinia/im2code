@@ -31,9 +31,9 @@ class UI2codeDataset(data.Dataset):
         image = Image.open(os.path.join(self.root, 'processedImage', image_path)).convert('L')
         if self.transform is not None:
             image = self.transform(image)
-        skeleton = [self.vocab['<BOS>']]
-        skeleton.extend([self.vocab[t] if t in self.vocab else self.vocab['<UNK>'] for t in label])
-        skeleton.append(self.vocab['<EOS>'])
+        skeleton = [self.vocab['<s>']]
+        skeleton.extend([self.vocab[t] if t in self.vocab else self.vocab['<unk>'] for t in label])
+        skeleton.append(self.vocab['</s>'])
         target = torch.Tensor(skeleton)
         return image, target
 
@@ -80,7 +80,7 @@ class UI2codeDataloader():
         self.dataset = UI2codeDataset(opt, phase)
         self.dataloader = torch.utils.data.DataLoader(dataset=self.dataset,
                                                       batch_size=opt.batch_size,
-                                                      shuffle=not opt.serial_batches and phase!='test',
+                                                      shuffle=(not opt.serial_batches) and phase!='test',
                                                       num_workers=opt.nThreads,
                                                       collate_fn=collate_fn)
     def load_data(self):
