@@ -2,6 +2,7 @@ from __future__ import print_function
 import torch
 import numpy as np
 from PIL import Image
+from torch.nn.utils import clip_grad_norm
 import torch.nn as nn
 import os
 
@@ -59,20 +60,20 @@ def mkdir(path):
 
 def get_vocab(opt):
     vocab = dict()
-    vocab['<PAD>'] = 0
-    vocab['<BOS>'] = 1
-    vocab['<EOS>'] = 2
-    vocab['<UNK>'] = 3
+    vocab['<pad>'] = 0
+    vocab['<s>'] = 1
+    vocab['</s>'] = 2
+    vocab['<unk>'] = 3
 
-    with open(opt.vocab_path) as f:
+    with open(opt.vocab_path, encoding='utf8') as f:
         for index, line in enumerate(f.readlines()):
             vocab[line.strip()] = index+4
     return vocab
 
 def get_rev_vocab(opt):
     vocab = list()
-    vocab.extend(['<PAD>', '<BOS>', '<EOS>', '<UNK>'])
-    with open(opt.vocab_path) as f:
+    vocab.extend(['<pab>', '<s>', '</s>', '<unk>'])
+    with open(opt.vocab_path, encoding='utf8') as f:
         for index, line in enumerate(f.readlines()):
             vocab.append(line.strip())
     return vocab
@@ -118,3 +119,18 @@ class LanguageModelCriterion(nn.Module):
         output = torch.sum(output) / torch.sum(mask)
 
         return output
+
+def clip_gradient(optimizer, grad_clip):
+    for group in optimizer.param_groups:
+        for param in group['params']:
+            param.grad.data.clamp_(-grad_clip, grad_clip)
+
+def clip_norm_gradient(optimizer, grad_clip):
+    for group in optimizer.param_groups:
+        for param in group['params']:
+            clip_grad_norm(param, grad_clip)
+
+
+def set_lr(optimizer, lr):
+    for group in optimizer.param_groups:
+        group['lr'] = lr

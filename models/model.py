@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence
 from torch.autograd import Variable
 from torch.nn.utils.rnn import pack_padded_sequence
+from .BeamSearch import Beam
 
 def conv3x3(in_planes, out_planes, stride=1):
     "3x3 convolution with padding"
@@ -39,7 +40,7 @@ class EncoderCNN(nn.Module):
 
     def forward(self, x):
         output = self.model(x) # batch * 512 * H * W
-        output = output.permute([0, 2, 3, 1]) # batch * H * W * 512
+        output = output.permute(0, 2, 3, 1) # batch * H * W * 512
         # output = torch.unbind(output, 1) # len(H) list of (batch * W * 512)
         return output
 
@@ -70,7 +71,7 @@ class EncoderRNN(nn.Module):
         outputs = []
         for i in range(imgH): # imgSeq height
             pos = Variable(torch.LongTensor(
-                [i] * img_feats.size(0)), requires_grad=False).cuda().contiguous()  # batch * (num_layer * 2) * hidden_dim
+                [i] * img_feats.size(0)), requires_grad=False).zero_().cuda().contiguous()  # batch * (num_layer * 2) * hidden_dim
             # (num_layer * 2) * batch * hidden_dim
             pos_embedding = self.pos_embedding(
                 pos).view(-1, 2 * self.n_layers, self.encoder_num_hidden).transpose(0, 1).contiguous()
@@ -89,6 +90,8 @@ class AttentionDecoder(nn.Module):
         self.target_embedding_size = opt.target_embedding_size
         self.max_decoder_l = opt.max_decoder_l
         self.dropout = opt.dropout
+        self.beam_size = opt.beam_size
+        self.vocab = opt.vocab
         self.embed = nn.Sequential(nn.Embedding(self.target_vocab_size, self.target_embedding_size),
                                    nn.ReLU(),
                                    nn.Dropout(self.dropout))
@@ -102,6 +105,14 @@ class AttentionDecoder(nn.Module):
         return (Variable(weight.new(self.decoder_num_layers, bsz, self.decoder_num_hidden).zero_()),
                 Variable(weight.new(self.decoder_num_layers, bsz, self.decoder_num_hidden).zero_()))
 
+    def extract_model(self):
+        models = dict()
+        models['embed'] = self.embed
+        models['output_projector'] = self.output_projector
+        models['core'] = self.core
+        models['logit'] = self.logit
+
+        return models
 
     def forward(self, cnn_feats, seq):
         """
@@ -121,6 +132,122 @@ class AttentionDecoder(nn.Module):
             outputs.append(output)
 
         return torch.cat([_.unsqueeze(1) for _ in outputs], 1)
+
+    def decode_beam(self, context):
+        """Decode a minibatch."""
+
+        beam_size = self.beam_size
+        batch_size = context.size(0)
+        state_h, state_c = self.init_hidden(batch_size)
+
+        #  (1) run the encoder on the src
+
+        context = context.transpose(0, 1)  # Make things sequence first.
+
+        # Expand tensors for each beam.
+        context = Variable(context.data.repeat(1, beam_size, 1))
+        dec_states = [
+            Variable(state_h.data.repeat(1, beam_size, 1)),
+            Variable(state_c.data.repeat(1, beam_size, 1))
+        ]
+
+        beam = [
+            Beam(beam_size, self.vocab, cuda=True)
+            for k in range(batch_size)
+        ]
+
+        batch_idx = list(range(batch_size))
+        remaining_sents = batch_size
+
+        for i in range(self.max_decoder_l):
+            # input (batch * beam)
+            input = torch.stack(
+                                [b.get_current_state()
+                                 for b in beam if not b.done]
+                                ).t().contiguous().view(1, -1)
+
+            trg_emb = self.embed(Variable(input).transpose(1, 0))
+            trg_h, (trg_h_t, trg_c_t) = self.core(
+                trg_emb,
+                context,
+                (dec_states[0].squeeze(0), dec_states[1].squeeze(0))
+            )
+
+            dec_states = (trg_h_t.unsqueeze(0), trg_c_t.unsqueeze(0))
+
+            dec_out = trg_h_t.squeeze(1)
+            out = F.softmax(self.output_projector(dec_out)).unsqueeze(0)
+
+            word_lk = out.view(
+                beam_size,
+                remaining_sents,
+                -1
+            ).transpose(0, 1).contiguous()
+
+            active = []
+            for b in range(batch_size):
+                if beam[b].done:
+                    continue
+
+                idx = batch_idx[b]
+                if not beam[b].advance(word_lk.data[idx]):
+                    active += [b]
+
+                for dec_state in dec_states:  # iterate over h, c
+                    # layers x beam*sent x dim
+                    sent_states = dec_state.view(
+                        -1, beam_size, remaining_sents, dec_state.size(2)
+                    )[:, :, idx]
+                    sent_states.data.copy_(
+                        sent_states.data.index_select(
+                            1,
+                            beam[b].get_current_origin()
+                        )
+                    )
+
+            if not active:
+                break
+
+            # in this section, the sentences that are still active are
+            # compacted so that the decoder is not run on completed sentences
+            active_idx = torch.cuda.LongTensor([batch_idx[k] for k in active])
+            batch_idx = {beam: idx for idx, beam in enumerate(active)}
+
+            def update_active(t):
+                # select only the remaining active sentences
+                view = t.data.view(
+                    -1, remaining_sents,
+                    self.model.decoder.hidden_size
+                )
+                new_size = list(t.size())
+                new_size[-2] = new_size[-2] * len(active_idx) \
+                    // remaining_sents
+                return Variable(view.index_select(
+                    1, active_idx
+                ).view(*new_size))
+
+            dec_states = (
+                update_active(dec_states[0]),
+                update_active(dec_states[1])
+            )
+            dec_out = update_active(dec_out)
+            context = update_active(context)
+
+            remaining_sents = len(active)
+
+        #  (4) package everything up
+
+        allHyp, allScores = [], []
+        n_best = 1
+
+        for b in range(batch_size):
+            scores, ks = beam[b].sort_best()
+
+            allScores += [scores[:n_best]]
+            hyps = list(zip(*[beam[b].get_hyp(k) for k in ks[:n_best]]))
+            allHyp += [hyps]
+
+        return allHyp, allScores
 
 
 

@@ -17,7 +17,6 @@ class TrainOptions(BaseOptions):
         self.parser.add_argument('--niter', type=int, default=100, help='# of iter at starting learning rate')
         self.parser.add_argument('--niter_decay', type=int, default=100, help='# of iter to linearly decay learning rate to zero')
         self.parser.add_argument('--beta1', type=float, default=0.5, help='momentum term of adam')
-        self.parser.add_argument('--lr', type=float, default=0.0002, help='initial learning rate for adam')
         # self.parser.add_argument('--no_lsgan', action='store_true', help='do *not* use least square GAN, if false, use vanilla GAN')
         # self.parser.add_argument('--lambda_identity', type=float, default=0.5,
         #                          help='use identity mapping. Setting lambda_identity other than 0 has an effect of scaling the weight of the identity mapping loss.'
@@ -26,6 +25,8 @@ class TrainOptions(BaseOptions):
         # self.parser.add_argument('--no_html', action='store_true', help='do not save intermediate training results to [opt.checkpoints_dir]/[opt.name]/web/')
 
     # Optimization
+        self.parser.add_argument(
+            '--norm_grad_clip', type=float, default=5, help='clip normalized gradients at this value')
         self.parser.add_argument('--num_epochs', type=int, default=10, help='The number of whole data passes')
         self.parser.add_argument('--batch_size', type=int, default=20, help='Batch size')
         self.parser.add_argument('--learning_rate', type=float, default=0.1, help='Initial learning rate')

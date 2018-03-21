@@ -19,7 +19,6 @@ class BaseOptions():
         self.parser.add_argument('--model', type=str, default='translation',
                                  help='chooses which model to use. cycle_gan, pix2pix, test')
         self.parser.add_argument('--nThreads', default=2, type=int, help='# threads for loading data')
-        self.parser.add_argument('--checkpoints_dir', type=str, default='./checkpoints', help='models are saved here')
         self.parser.add_argument('--norm', type=str, default='instance', help='instance normalization or batch normalization')
         self.parser.add_argument('--serial_batches', action='store_true', help='if true, takes images in order to make batches, otherwise takes them randomly')
         self.parser.add_argument('--no_dropout', action='store_true', help='no dropout for the generator')
@@ -44,6 +43,7 @@ class BaseOptions():
         self.parser.add_argument('--label_path', type=str, default='data/XMLsequence.lst', help='The path containing data file names and labels. Format per line: image_path characters')
         self.parser.add_argument('--vocab_path', type=str, default='data/xml_vocab.txt', help='Vocabulary file. A token per line.')
         self.parser.add_argument('--model_dir', type=str, default='model', help='The directory for saving and loading model parameters (structure is not stored)')
+        self.parser.add_argument('--beam_size', type=int, default=5, help='beam search size when validation')
         self.initialized = True
 
 
@@ -77,7 +77,7 @@ class BaseOptions():
         print('-------------- End ----------------')
 
         # save to the disk
-        expr_dir = os.path.join(self.opt.checkpoints_dir, self.opt.name)
+        expr_dir = os.path.join(self.opt.checkpoint_path, self.opt.name)
         util.mkdirs(expr_dir)
         file_name = os.path.join(expr_dir, 'opt.txt')
         with open(file_name, 'wt') as opt_file:
