@@ -101,7 +101,7 @@ def train(opt):
             #     torch.save(decoder.state_dict(), os.path.join(opt.checkpoint_path, 'decoder-%d-%d.pkl' % (epoch + 1, total_steps)))
             #     torch.save(encoderRNN.state_dict(), os.path.join(opt.checkpoint_path, 'encoder-rnn-%d-%d.pkl' % (epoch + 1, total_steps)))
             #     torch.save(encoderCNN.state_dict(), os.path.join(opt.checkpoint_path, 'encoder-cnn-%d-%d.pkl' % (epoch + 1, total_steps)))
-        
+
         print('the end of epoch %d, iters %d' % (epoch, total_steps))
         val_accuracy = []
         for (images, captions, masks) in val_data_loader:
@@ -118,7 +118,7 @@ def train(opt):
             accuracy = wordErrorRate(beam_output[:, :-1], captions.data[:, 1:], opt.rev_vocab)
             # val_losses.append(loss.data[0])
             val_accuracy.append(accuracy)
-            cur_val_loss = sum(val_accuracy) / len(val_accuracy)
+        cur_val_loss = sum(val_accuracy) / len(val_accuracy)
         print('validation loss: %.4f\nBest validation loss: %.4f'% (cur_val_loss, best_val_loss))
         add_summary_value(tf_summary_writer, 'val_accuracy', cur_val_loss, epoch)
         if cur_val_loss < best_val_loss:

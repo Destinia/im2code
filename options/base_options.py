@@ -40,6 +40,7 @@ class BaseOptions():
         self.parser.add_argument('--dropout', type=int, default=0.0, help='Dropout probability') # does support dropout now!!!
         self.parser.add_argument('--train_data_path', type=str, default='data/train.lst', help='The path containing data file names and labels. Format per line: image_path characters')
         self.parser.add_argument('--val_data_path', type=str, default='data/validate.lst', help='The path containing validate data file names and labels. Format per line: image_path characters')
+        self.parser.add_argument('--test_data_path', type=str, default='data/test_shuffle.lst', help='The path containing validate data file names and labels. Format per line: image_path characters')
         self.parser.add_argument('--label_path', type=str, default='data/XMLsequence.lst', help='The path containing data file names and labels. Format per line: image_path characters')
         self.parser.add_argument('--vocab_path', type=str, default='data/xml_vocab.txt', help='Vocabulary file. A token per line.')
         self.parser.add_argument('--model_dir', type=str, default='model', help='The directory for saving and loading model parameters (structure is not stored)')
