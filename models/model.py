@@ -68,6 +68,7 @@ class EncoderRNN(nn.Module):
         """
         assert(len(img_feats) < self.max_encoder_l_h)
         imgH = img_feats.size(1)
+        imgW = img_feats.size(2)
         outputs = []
         for i in range(imgH): # imgSeq height
             pos = Variable(torch.LongTensor(
@@ -123,6 +124,7 @@ class AttentionDecoder(nn.Module):
         state = self.init_hidden(batch_size)
 
         outputs = []
+        
         for i in range(seq.size(1)):
             it = seq[:, i].clone()
 
@@ -132,6 +134,23 @@ class AttentionDecoder(nn.Module):
             outputs.append(output)
 
         return torch.cat([_.unsqueeze(1) for _ in outputs], 1)
+
+    def decoder(self, cnn_feats):
+        batch_size = cnn_feats.size(0)
+        state = self.init_hidden(batch_size)
+
+        outputs = []
+        it = Variable(torch.LongTensor([self.vocab['<s>']]
+                      * batch_size)).contiguous().cuda()
+        for i in range(self.max_decoder_l):
+            xt = self.embed(it)  # batch * embedding_dim
+            output, state = self.core(xt, cnn_feats, state)
+            output = F.log_softmax(self.logit(output))  # batch * vocab_size
+            _, output = torch.max(output, 1)
+            it = output
+            outputs.append(output)
+
+        return torch.cat([_.unsqueeze(1) for _ in outputs], 1).data
 
     def decode_beam(self, context):
         """Decode a minibatch."""
