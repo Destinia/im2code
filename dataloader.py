@@ -27,7 +27,7 @@ class UI2codeDataset(data.Dataset):
     
     def __getitem__(self, index):
         image_path = self.image_paths[self.ids[index]]
-        label = self.labels[index]
+        label = self.labels[self.ids[index]]
         image = Image.open(os.path.join(self.root, 'processedImage', image_path)).convert('L')
         if self.transform is not None:
             image = self.transform(image)
@@ -88,9 +88,6 @@ class UI2codeDataloader():
 
     def get_vocab(self):
         return self.dataset.get_vocab()
-    
-    def __len__(self):
-        return len(self.dataset)
     
     def __iter__(self):
         for i, data in enumerate(self.dataloader):
