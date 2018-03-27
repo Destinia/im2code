@@ -16,7 +16,7 @@ class UI2codeDataset(data.Dataset):
         self.image_paths = get_images(opt, phase)
         self.ids = list(self.image_paths.keys())
         print('#image: ', len(self.image_paths))
-        self.vocab = get_vocab(opt)
+        self.vocab = opt.vocab
         self.labels = get_labels(opt)
         # self.transform = transforms.Compose([transforms.ToTensor(),
         #     transforms.Normalize([0.2731853791024895], [0.24186649347904463])])
@@ -78,6 +78,7 @@ def collate_fn(data):
 class UI2codeDataloader():
     def __init__(self, opt, phase='train'):
         self.dataset = UI2codeDataset(opt, phase)
+        self.batch_size = opt.batch_size
         self.dataloader = torch.utils.data.DataLoader(dataset=self.dataset,
                                                       batch_size=opt.batch_size,
                                                       shuffle=(not opt.serial_batches) and phase!='test',
@@ -88,6 +89,9 @@ class UI2codeDataloader():
 
     def get_vocab(self):
         return self.dataset.get_vocab()
+
+    def __len__(self):
+        return len(self.dataset) // self.batch_size
     
     def __iter__(self):
         for i, data in enumerate(self.dataloader):

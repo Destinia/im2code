@@ -18,6 +18,7 @@ class BaseOptions():
         self.parser.add_argument('--name', type=str, default='experiment_name', help='name of the experiment. It decides where to store samples and models')
         self.parser.add_argument('--model', type=str, default='translation',
                                  help='chooses which model to use. cycle_gan, pix2pix, test')
+        self.parser.add_argument('--spatial', action='store_true', help='encoder use spatial LSTM')
         self.parser.add_argument('--nThreads', default=2, type=int, help='# threads for loading data')
         self.parser.add_argument('--norm', type=str, default='instance', help='instance normalization or batch normalization')
         self.parser.add_argument('--serial_batches', action='store_true', help='if true, takes images in order to make batches, otherwise takes them randomly')
@@ -57,8 +58,10 @@ class BaseOptions():
         self.opt.max_encoder_l_w = math.floor(self.opt.max_image_width / 8.0)
         self.opt.max_encoder_l_h = math.floor(self.opt.max_image_height / 8.0)
         self.opt.decoder_num_hidden = 2 * self.opt.encoder_num_hidden
+        if self.opt.spatial:
+            # double size decoder num_hidden
+            self.opt.decoder_num_hidden = self.opt.decoder_num_hidden * 2
         self.opt.max_decoder_l = self.opt.max_num_tokens + 1
-
         str_ids = self.opt.gpu_ids.split(',')
         self.opt.gpu_ids = []
         for str_id in str_ids:
@@ -76,11 +79,17 @@ class BaseOptions():
         for k, v in sorted(args.items()):
             print('%s: %s' % (str(k), str(v)))
         print('-------------- End ----------------')
-
+        # setup vocab
+        self.opt.vocab = util.get_vocab(self.opt)
+        self.opt.rev_vocab = [t[0]
+                              for t in list(sorted(self.opt.vocab.items(), key=lambda x: x[1]))]
+        self.opt.eos = self.opt.vocab['</s>']
+        self.opt.opening_tag = '{'
+        self.opt.closing_tag = '}'
         # save to the disk
-        expr_dir = os.path.join(self.opt.checkpoint_path, self.opt.name)
-        util.mkdirs(expr_dir)
-        file_name = os.path.join(expr_dir, 'opt.txt')
+        self.opt.expr_dir = os.path.join(self.opt.checkpoint_path, self.opt.name)
+        util.mkdirs(self.opt.expr_dir)
+        file_name = os.path.join(self.opt.expr_dir, 'opt.txt')
         with open(file_name, 'wt') as opt_file:
             opt_file.write('------------ Options -------------\n')
             for k, v in sorted(args.items()):

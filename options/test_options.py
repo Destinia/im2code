@@ -4,7 +4,7 @@ from .base_options import BaseOptions
 class TestOptions(BaseOptions):
     def initialize(self):
         BaseOptions.initialize(self)
-        self.parser.add_argument('--model_iter', type=int, default=10, help='model iteration')
+        self.parser.add_argument('--model_name', type=str, default=10, help='model iteration')
         self.parser.add_argument('--results_dir', type=str, default='./save/', help='saves results here.')
         self.parser.add_argument('--aspect_ratio', type=float, default=1.0, help='aspect ratio of result images')
         self.parser.add_argument('--phase', type=str, default='test', help='train, val, test, etc')
