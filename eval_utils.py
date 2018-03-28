@@ -23,7 +23,7 @@ class TreeEditDistance():
         self.vocab = opt.rev_vocab
         self.opening_tag = opt.opening_tag
         self.closing_tag = opt.closing_tag
-        self.eos = '</s>'
+        self.eos = opt.eos
 
     def build_tree(self, seq):
 
@@ -37,7 +37,7 @@ class TreeEditDistance():
             if token == self.closing_tag:
                 del hierarchy[-1]
                 continue
-            if token == self.eos:
+            if t == self.eos:
                 break
             newNode = Node(token)
             hierarchy[-2].addkid(newNode)

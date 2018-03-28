@@ -79,9 +79,10 @@ class UI2codeDataloader():
     def __init__(self, opt, phase='train'):
         self.dataset = UI2codeDataset(opt, phase)
         self.batch_size = opt.batch_size
+        self.shuffle = (not opt.serial_batches) and phase == 'train'
         self.dataloader = torch.utils.data.DataLoader(dataset=self.dataset,
                                                       batch_size=opt.batch_size,
-                                                      shuffle=(not opt.serial_batches) and phase!='test',
+                                                      shuffle=self.shuffle,
                                                       num_workers=opt.nThreads,
                                                       collate_fn=collate_fn)
     def load_data(self):
