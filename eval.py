@@ -10,7 +10,7 @@ import pickle
 from eval_utils import wordErrorRate, TreeEditDistance
 
 def main(opt):
-    data_loader = UI2codeDataloader(opt, phase='test')
+    data_loader = UI2codeDataloader(opt, phase='val')
     opt.target_vocab_size = len(opt.vocab)
     treeEval = TreeEditDistance(opt)
     dataset = data_loader.load_data()
@@ -38,15 +38,17 @@ def main(opt):
         features = encoderCNN(images)
         encoded_features = encoderRNN(features)
         output_greedy = decoder.decode(encoded_features)
-        beam_output, beam_score = decoder.decode_beam(encoded_features)
+        beam_output = decoder.beam_search(encoded_features)
         accuracy_beam = wordErrorRate(
-            beam_output, captions.data[:, 1:], opt.rev_vocab)
+            beam_output, captions.data[:, 1:], opt.eos)
         accuracy_greedy = wordErrorRate(
             output_greedy, captions.data[:, 1:], opt.eos)
         # accuracy_tree = treeEval.distance(beam_output, captions.data[:, 1:])
+        # tree_distance_beam = treeEval.distance(beam_output, captions.data[:, 1:])
+        # tree_distance_greedy = treeEval.distance(beam_output, captions.data[:, 1:])
         accuracy_greedies.append(accuracy_greedy)
         accuracy_beams.append(accuracy_beam)
-        # print(accuracy_beam, accuracy_greedy)
+
         # print(accuracy_greedy, accuracy_beam, accuracy_tree)
         # print(accuracy_beam, accuracy_greedy)
     print('accuracy beam search: %.4f'%(sum(accuracy_beams)/len(accuracy_beams)))

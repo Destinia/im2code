@@ -6,6 +6,7 @@ from torch.nn.utils.rnn import pack_padded_sequence
 from torch.autograd import Variable
 from torch.nn.utils.rnn import pack_padded_sequence
 from .BeamSearch import Beam
+from util.util import Sequence, TopN
 
 def conv3x3(in_planes, out_planes, stride=1):
     "3x3 convolution with padding"
@@ -57,6 +58,42 @@ class EncoderRNN(nn.Module):
             opt.max_encoder_l_h, self.n_layers * self.encoder_num_hidden * 2)
         # self.pos_embedding_bw = nn.Embedding(
         #     opt.max_encoder_l_h, self.n_layers * self.encoder_num_hidden * 2)
+        self.lstm = nn.LSTM(
+            self.input_size, self.encoder_num_hidden, self.n_layers, bidirectional=True)
+        
+    def forward(self, img_feats):
+        """
+        img_feature shape: batch * H * W * hidden_dim
+        """
+        assert(len(img_feats) < self.max_encoder_l_h)
+        imgH = img_feats.size(1)
+        outputs = []
+        for i in range(imgH): # imgSeq height
+            pos = Variable(torch.LongTensor(
+                [i] * img_feats.size(0)).zero_(), requires_grad=False).cuda().contiguous()  # batch * (num_layer * 2) * hidden_dim
+            # (num_layer * 2) * batch * hidden_dim
+            pos_embedding = self.pos_embedding(
+                pos).view(-1, 2 * self.n_layers, self.encoder_num_hidden).transpose(0, 1).contiguous()
+            source = img_feats[:, i].transpose(0, 1) # W * batch * hidden_dim
+            output, _ = self.lstm(source, (pos_embedding, pos_embedding))
+            outputs.extend(output)
+        return torch.cat([_.unsqueeze(1) for _ in outputs], 1)
+
+class SpatialEncoderRNN(nn.Module):
+    def __init__(self, opt):
+        super(EncoderRNN, self).__init__()
+        self.batch_size = opt.batch_size
+        self.input_size = opt.cnn_feature_size
+        self.max_encoder_l_h = opt.max_encoder_l_h
+        self.encoder_num_hidden = opt.encoder_num_hidden
+        self.n_layers = opt.encoder_num_layers
+        # 4* for bidirectional and (h, c)
+        self.pos_embedding_w = nn.Embedding(
+            opt.max_encoder_l_h, self.n_layers * self.encoder_num_hidden * 2)
+        self.pos_embedding_h = nn.Embedding(
+            opt.max_encoder_l_w, self.n_layers * self.encoder_num_hidden * 2)
+        # self.pos_embedding_bw = nn.Embedding(
+        #     opt.max_encoder_l_h, self.n_layers * self.encoder_num_hidden * 2)
         self.lstm_w = nn.LSTM(
             self.input_size, self.encoder_num_hidden, self.n_layers, bidirectional=True)
         self.lstm_h = nn.LSTM(
@@ -69,18 +106,30 @@ class EncoderRNN(nn.Module):
         assert(len(img_feats) < self.max_encoder_l_h)
         imgH = img_feats.size(1)
         imgW = img_feats.size(2)
-        outputs = []
+        outputs_w = []
+        outputs_h = []
         for i in range(imgH): # imgSeq height
             pos = Variable(torch.LongTensor(
                 [i] * img_feats.size(0)).zero_(), requires_grad=False).cuda().contiguous()  # batch * (num_layer * 2) * hidden_dim
             # (num_layer * 2) * batch * hidden_dim
-            pos_embedding = self.pos_embedding(
+            pos_embedding = self.pos_embedding_w(
                 pos).view(-1, 2 * self.n_layers, self.encoder_num_hidden).transpose(0, 1).contiguous()
             source = img_feats[:, i].transpose(0, 1) # W * batch * hidden_dim
             output, _ = self.lstm_w(source, (pos_embedding, pos_embedding))
-            ## TODO check recoder h or c
-            outputs.extend(output)
-        return torch.cat([_.unsqueeze(1) for _ in outputs], 1)
+            outputs_w.extend(output)
+        for i in range(imgW): # imgSeq width
+            pos = Variable(torch.LongTensor(
+                [i] * img_feats.size(0)).zero_(), requires_grad=False).cuda().contiguous()  # batch * (num_layer * 2) * hidden_dim
+            # (num_layer * 2) * batch * hidden_dim
+            pos_embedding = self.pos_embedding_h(
+                pos).view(-1, 2 * self.n_layers, self.encoder_num_hidden).transpose(0, 1).contiguous()
+            source = img_feats[:, :, i].transpose(0, 1) # H * batch * hidden_dim
+            output, _ = self.lstm_h(source, (pos_embedding, pos_embedding))
+            outputs_h.extend(output) # encoder_l * batch * num_hudden
+        outputs_w_t = torch.cat([_.unsqueeze(1) for _ in outputs_w], 1)
+        outputs_h_t = torch.cat([_.unsqueeze(1) for _ in outputs_h], 1).view(-1, imgW, imgH,
+                                                                             self.encoder_num_hidden).transpose(1, 2).view(-1, imgH * imgW, self.encoder_num_hidden)
+        return torch.cat((outputs_w_t, outputs_h_t), -1)
 
 class AttentionDecoder(nn.Module):
     def __init__(self, opt):
@@ -93,6 +142,8 @@ class AttentionDecoder(nn.Module):
         self.dropout = opt.dropout
         self.beam_size = opt.beam_size
         self.vocab = opt.vocab
+        self.bos = opt.bos
+        self.eos = opt.eos
         self.embed = nn.Sequential(nn.Embedding(self.target_vocab_size, self.target_embedding_size),
                                    nn.ReLU(),
                                    nn.Dropout(self.dropout))
@@ -101,8 +152,11 @@ class AttentionDecoder(nn.Module):
         self.logit = nn.Linear(self.decoder_num_hidden, self.target_vocab_size)
 
 
-    def init_hidden(self, bsz):
+    def init_hidden(self, bsz, batch_first=False):
         weight = next(self.parameters()).data
+        if batch_first:
+            return (Variable(weight.new(bsz, self.decoder_num_layers, self.decoder_num_hidden).zero_()),
+                    Variable(weight.new(bsz, self.decoder_num_layers, self.decoder_num_hidden).zero_()))
         return (Variable(weight.new(self.decoder_num_layers, bsz, self.decoder_num_hidden).zero_()),
                 Variable(weight.new(self.decoder_num_layers, bsz, self.decoder_num_hidden).zero_()))
 
@@ -135,7 +189,7 @@ class AttentionDecoder(nn.Module):
 
         return torch.cat([_.unsqueeze(1) for _ in outputs], 1)
 
-    def decoder(self, cnn_feats):
+    def decode(self, cnn_feats):
         batch_size = cnn_feats.size(0)
         state = self.init_hidden(batch_size)
 
@@ -189,13 +243,13 @@ class AttentionDecoder(nn.Module):
             trg_h, (trg_h_t, trg_c_t) = self.core(
                 trg_emb,
                 context,
-                dec_states
+                (dec_states[0], dec_states[1]),
             )
 
             dec_states = (trg_h_t, trg_c_t)
 
             dec_out = trg_h.squeeze(1)
-            out = F.softmax(self.output_projector(dec_out)).unsqueeze(0)
+            out = F.softmax(self.logit(dec_out)).unsqueeze(0)
 
             word_lk = out.view(
                 beam_size,
@@ -266,7 +320,131 @@ class AttentionDecoder(nn.Module):
             hyps = [beam[b].get_hyp(k) for k in ks[:n_best]][0]
             allHyp += [hyps]
 
-        return torch.Tensor(allHyp), allScores
+        return allHyp, allScores
+
+    def generate(self, input, state, context, k=1):
+        """Run decoder with attention
+        Args:
+          input: RNN cell input i.e. previous timestamp output (batch_size * 1)
+          context: image feature encoder sequence (num_encoder_l * num_encoder_dim)
+          state (optional): previous timestamp state (batch * num_decoder_dim, batch * num_decoder_dim)
+        Returns:
+          words: predict topK id
+          logprobs: probabilities of words
+          new_states: next state list with len=batch_size element_dim (num_layers * 1 * num_hidden)
+        """
+        start_time = time.time()
+        it = Variable(torch.LongTensor(input), volatile=True).cuda()
+        xt = self.embed(it)
+        logits, new_states = self.core(xt, context, state, batch_first=True)
+        logprobs = F.log_softmax(self.logit(logits))
+        logprobs, words = logprobs.data.topk(k, 1)
+        # print('check 1:', time.time() - start_time)
+        # print('check 2:', time.time() - start_time)
+        return words, logprobs, new_states
+
+    def beam_search(self, context):
+        """Runs beam search sequence generation on a single image.
+        Args:
+          initial_input: An initial input for the model -
+                         list of batch size holding the first input for every entry.
+          initial_state (optional): An initial state for the model -
+                         list of batch size holding the current state for every entry.
+        Returns:
+          A list of batch size, each the most likely sequence from the possible beam_size candidates.
+        """
+        batch_size = context.size(0)
+        partial_sequences = [TopN(self.beam_size) for _ in range(batch_size)]
+        complete_sequences = [TopN(self.beam_size) for _ in range(batch_size)]
+
+        initial_input = [self.bos] * batch_size
+        initial_state = self.init_hidden(batch_size, batch_first=True)
+
+        words, logprobs, (new_state_h, new_state_c) = self.generate(
+            initial_input, initial_state, context,
+            k=self.beam_size)
+        for b in range(batch_size):
+            # Create first beam_size candidate hypotheses for each entry in
+            # batch
+            for k in range(self.beam_size):
+                seq = Sequence(
+                    sentence=[words[b][k]],
+                    state=(new_state_h[b], new_state_c[b]),
+                    logprob=logprobs[b][k],
+                    score=logprobs[b][k],
+                    context=context[b])
+                partial_sequences[b].push(seq)
+
+        # Run beam search.
+        for _ in range(self.max_decoder_l - 1):
+            partial_sequences_list = [p.extract() for p in partial_sequences]
+            for p in partial_sequences:
+                p.reset()
+
+            # Keep a flattened list of parial hypotheses, to easily feed
+            # through a model as whole batch
+            flattened_partial = [
+                s for sub_partial in partial_sequences_list for s in sub_partial]
+
+            input_feed = [c.sentence[-1] for c in flattened_partial]
+            state_h, state_c = zip(*[c.state for c in flattened_partial])
+            state_feed = torch.stack(list(state_h)), torch.stack(list(state_c))
+            context_feed = torch.stack([c.context for c in flattened_partial])
+            if len(input_feed) == 0:
+                # We have run out of partial candidates; happens when
+                # beam_size=1
+                break
+
+            # Feed current hypotheses through the model, and recieve new outputs and states
+            # logprobs are needed to rank hypotheses
+            start_time = time.time()
+            words, logprobs, (new_states_h, new_state_c) \
+                = self.generate(
+                    input_feed, state_feed, context_feed,
+                    k=self.beam_size + 1)
+            # print('time2: ', time.time() - start_time)
+            idx = 0
+            for b in range(batch_size):
+                # For every entry in batch, find and trim to the most likely
+                # beam_size hypotheses
+                for partial in partial_sequences_list[b]:
+                    state = (new_states_h[idx], new_state_c[idx])
+                    k = 0
+                    num_hyp = 0
+                    while num_hyp < self.beam_size:
+                        w = words[idx][k]
+                        sentence = partial.sentence + [w]
+                        logprob = partial.logprob + logprobs[idx][k]
+                        score = logprob
+                        k += 1
+                        num_hyp += 1
+
+                        if w == self.eos:
+                            ## for NMT normalize length
+                            # if self.length_normalization_factor > 0:
+                            #     L = self.length_normalization_const
+                            #     length_penalty = (L + len(sentence)) / (L + 1)
+                            #     score /= length_penalty ** self.length_normalization_factor
+                            beam = Sequence(sentence, state,
+                                            logprob, score, context[b])
+                            complete_sequences[b].push(beam)
+                            num_hyp -= 1  # we can fit another hypotheses as this one is over
+                        else:
+                            beam = Sequence(sentence, state,
+                                            logprob, score, context[b])
+                            partial_sequences[b].push(beam)
+                    idx += 1
+
+        # If we have no complete sequences then fall back to the partial sequences.
+        # But never output a mixture of complete and partial sequences because a
+        # partial sequence could have a higher score than all the complete
+        # sequences.
+        for b in range(batch_size):
+            if not complete_sequences[b].size():
+                complete_sequences[b] = partial_sequences[b]
+        seqs = [complete.extract(sort=True)[0]
+                for complete in complete_sequences]
+        return [s.sentence for s in seqs]
 
 
 
@@ -285,6 +463,9 @@ class UI2codeAttention(nn.Module):
         """
         xt shape: batch * input_size
         context shape: batch * len(feature_map) * decoder_num_hidden
+        return:
+          context_output: batch_size * decoder_num_hidden
+          state: tuple of (ht, ct) each dim - num_layers * batch_size * decoder_num_hidden
         """
         hs = []
         cs = []
@@ -303,8 +484,8 @@ class UI2codeAttention(nn.Module):
         top_h= hs[-1]
         mapped_h = self.hidden_mapping(top_h) ## batch * num_hidden
         attn = torch.bmm(context, mapped_h.unsqueeze(2)) ## batch * len(feature) * 1
-        attn_weight = F.softmax(attn.squeeze()) ## batch * len(feature)
-        context_combined = torch.bmm(attn_weight.unsqueeze(1), context).squeeze() ## batch * num_hidden
+        attn_weight = F.softmax(attn.squeeze(2)) ## batch * len(feature)
+        context_combined = torch.bmm(attn_weight.unsqueeze(1), context).squeeze(1) ## batch * num_hidden
         context_output = self.output_mapping(torch.cat([context_combined, top_h], 1))
         return context_output, (torch.stack(hs).contiguous(), torch.stack(cs).contiguous())
 
