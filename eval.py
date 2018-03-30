@@ -7,7 +7,9 @@ from torch.autograd import Variable
 
 from models.model import EncoderCNN, EncoderRNN, AttentionDecoder
 import pickle
-from eval_utils import wordErrorRate, TreeEditDistance
+from eval_utils import wordErrorRate, distance
+from multiprocessing import Pool
+import time
 
 def main(opt):
     data_loader = UI2codeDataloader(opt, phase='val')
@@ -32,20 +34,27 @@ def main(opt):
     accuracy_beams, accuracy_greedies = [], []
     for (images, captions, masks) in tqdm(data_loader):
         images = Variable(images, requires_grad=False).cuda()
-        captions = Variable(captions, requires_grad=False).cuda()
         masks = Variable(masks, requires_grad=False).cuda()
 
         features = encoderCNN(images)
         encoded_features = encoderRNN(features)
         output_greedy = decoder.decode(encoded_features)
-        beam_output = decoder.beam_search(encoded_features)
+        beam_output, _ = decoder.decode_beam(encoded_features)
         accuracy_beam = wordErrorRate(
-            beam_output, captions.data[:, 1:], opt.eos)
+            beam_output, captions[:, 1:], opt.eos)
         accuracy_greedy = wordErrorRate(
-            output_greedy, captions.data[:, 1:], opt.eos)
+            output_greedy, captions[:, 1:], opt.eos)
         # accuracy_tree = treeEval.distance(beam_output, captions.data[:, 1:])
         # tree_distance_beam = treeEval.distance(beam_output, captions.data[:, 1:])
-        # tree_distance_greedy = treeEval.distance(beam_output, captions.data[:, 1:])
+        output_greedy = output_greedy.cpu().numpy()
+        start_time = time.time()
+        with Pool(processes=16) as pool:
+            tree_distance_greedy = pool.starmap(distance, zip(
+                output_greedy, captions.numpy()[:, 1:]))
+            tree_distance_greedy_accuracy = sum(tree_distance_greedy)/len(tree_distance_greedy)
+        print(tree_distance_greedy_accuracy)
+
+        ## save for test
         accuracy_greedies.append(accuracy_greedy)
         accuracy_beams.append(accuracy_beam)
 
