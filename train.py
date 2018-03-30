@@ -31,22 +31,25 @@ def add_summary_value(writer, key, value, iteration):
 
 def train(opt):
     data_loader = UI2codeDataloader(opt)
-    opt.vocab = data_loader.get_vocab()
-    opt.rev_vocab = [t[0] for t in list(sorted(opt.vocab.items(), key=lambda x: x[1]))]
-    opt.eos = opt.vocab['</s>']
-    opt.target_vocab_size = len(opt.vocab)
     val_data_loader = UI2codeDataloader(opt, phase='val')
     dataset = data_loader.load_data()
-    tf_summary_writer = tf and tf.summary.FileWriter(opt.checkpoint_path)
+    tf_summary_writer = tf and tf.summary.FileWriter(opt.expr_dir)
 
     # model = create_model(opt)
     # visualizer = Visualizer(opt)
     encoderCNN = EncoderCNN(opt)
-    encoderRNN = EncoderRNN(opt)
     if opt.spatial:
-        decoder = SpatialEncoderRNN(opt)
+        encoderRNN = SpatialEncoderRNN(opt)
     else:
-        decoder = AttentionDecoder(opt)
+        encoderRNN = EncoderRNN(opt)
+    decoder = AttentionDecoder(opt)
+    if opt.start_from:
+        encoderCNN.load_state_dict(torch.load(os.path.join(
+            opt.results_dir, 'encoder-cnn-%s.pkl' % (opt.model_name))))
+        encoderRNN.load_state_dict(torch.load(os.path.join(
+            opt.results_dir, 'encoder-rnn-%s.pkl' % (opt.model_name))))
+        decoder.load_state_dict(torch.load(os.path.join(
+            opt.results_dir, 'decoder-%s.pkl' % (opt.model_name))))
     if torch.cuda.is_available():
         encoderCNN.cuda()
         encoderRNN.cuda()
@@ -111,16 +114,11 @@ def train(opt):
             images = Variable(images, requires_grad=False).cuda()
             captions = Variable(captions, requires_grad=False).cuda()
             masks = Variable(masks, requires_grad=False).cuda()
-            # targets = pack_padded_sequence(captions, lengths, batch_first=True)[0]
             features = encoderCNN(images)
             encoded_features = encoderRNN(features)
             greedy_outputs = decoder.decode(encoded_features)
-            # beam_output, beam_score = decoder.decode_beam(encoded_features)
-            # print(beam_output, beam_score)
-            # loss = criterion(beam_output[:, :-1], captions[:,1:], masks[:,1:])
             accuracy = wordErrorRate(
-                greedy_outputs[:, :-1], captions.data[:, 1:], opt.eos)
-            # val_losses.append(loss.data[0])
+                greedy_outputs, captions.data[:, 1:], opt.eos)
             val_accuracy.append(accuracy)
         cur_val_accuracy = sum(val_accuracy) / len(val_accuracy)
         
@@ -141,7 +139,7 @@ def train(opt):
             print('update learning rate: %.4f' % (opt.current_lr))
             utils.set_lr(optimizer, opt.current_lr)
 
-        print('validation loss: %.4f\nBest validation loss: %.4f' %
+        print('validation accuracy: %.4f\nBest validation accuracy: %.4f' %
               (cur_val_accuracy, best_val_accuracy))
 
 

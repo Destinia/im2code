@@ -83,6 +83,7 @@ class BaseOptions():
         self.opt.vocab = util.get_vocab(self.opt)
         self.opt.rev_vocab = [t[0]
                               for t in list(sorted(self.opt.vocab.items(), key=lambda x: x[1]))]
+        self.opt.target_vocab_size = len(self.opt.vocab)
         self.opt.bos = self.opt.vocab['<s>']
         self.opt.eos = self.opt.vocab['</s>']
         self.opt.opening_tag = '{'
