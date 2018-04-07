@@ -12,7 +12,6 @@ class BaseOptions():
 
     def initialize(self):
         self.parser.add_argument('--data_root', required=True, help='path to images (should have subfolders trainA, trainB, valA, valB, etc)')
-        self.parser.add_argument('--batchSize', type=int, default=1, help='input batch size')
         self.parser.add_argument('--input_nc', type=int, default=3, help='# of input image channels')
         self.parser.add_argument('--gpu_ids', type=str, default='0', help='gpu ids: e.g. 0  0,1,2, 0,2. use -1 for CPU')
         self.parser.add_argument('--name', type=str, default='experiment_name', help='name of the experiment. It decides where to store samples and models')

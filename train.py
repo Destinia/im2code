@@ -43,13 +43,6 @@ def train(opt):
     else:
         encoderRNN = EncoderRNN(opt)
     decoder = AttentionDecoder(opt)
-    if opt.start_from:
-        encoderCNN.load_state_dict(torch.load(os.path.join(
-            opt.results_dir, 'encoder-cnn-%s.pkl' % (opt.model_name))))
-        encoderRNN.load_state_dict(torch.load(os.path.join(
-            opt.results_dir, 'encoder-rnn-%s.pkl' % (opt.model_name))))
-        decoder.load_state_dict(torch.load(os.path.join(
-            opt.results_dir, 'decoder-%s.pkl' % (opt.model_name))))
     if torch.cuda.is_available():
         encoderCNN.cuda()
         encoderRNN.cuda()

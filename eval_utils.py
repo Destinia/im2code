@@ -11,7 +11,7 @@ def wordErrorRate(results, targets, eos_index):
                 break
             ret = ret + chr(int(t)) + ' '
         return ret
-    results_str = [tokens2str(r, ) for r in results]
+    results_str = [tokens2str(r) for r in results]
     targets_str = [tokens2str(r) for r in targets]
 
     edit_distance = [min(1, Levenshtein.distance(r, t)/len(t)) for r, t in zip(results_str, targets_str)]
@@ -79,5 +79,3 @@ def build_tree(seq):
 
 def tree_distance(r, t):
     return simple_distance(build_tree(r), build_tree(t))/len(t)
-
-

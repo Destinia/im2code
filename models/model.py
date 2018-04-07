@@ -81,7 +81,7 @@ class EncoderRNN(nn.Module):
 
 class SpatialEncoderRNN(nn.Module):
     def __init__(self, opt):
-        super(EncoderRNN, self).__init__()
+        super(SpatialEncoderRNN, self).__init__()
         self.batch_size = opt.batch_size
         self.input_size = opt.cnn_feature_size
         self.max_encoder_l_h = opt.max_encoder_l_h
@@ -125,10 +125,10 @@ class SpatialEncoderRNN(nn.Module):
                 pos).view(-1, 2 * self.n_layers, self.encoder_num_hidden).transpose(0, 1).contiguous()
             source = img_feats[:, :, i].transpose(0, 1) # H * batch * hidden_dim
             output, _ = self.lstm_h(source, (pos_embedding, pos_embedding))
-            outputs_h.extend(output) # encoder_l * batch * num_hudden
+            outputs_h.append(output) # encoder_l * batch * num_hudden
         outputs_w_t = torch.cat([_.unsqueeze(1) for _ in outputs_w], 1)
-        outputs_h_t = torch.cat([_.unsqueeze(1) for _ in outputs_h], 1).view(-1, imgW, imgH,
-                                                                             self.encoder_num_hidden).transpose(1, 2).view(-1, imgH * imgW, self.encoder_num_hidden)
+        outputs_h_t = torch.stack(outputs_h, 1).view(
+            imgH * imgW, -1, self.encoder_num_hidden * 2 * self.n_layers).transpose(0, 1)
         return torch.cat((outputs_w_t, outputs_h_t), -1)
 
 class AttentionDecoder(nn.Module):
@@ -158,7 +158,8 @@ class AttentionDecoder(nn.Module):
             return (Variable(weight.new(bsz, self.decoder_num_layers, self.decoder_num_hidden).zero_()),
                     Variable(weight.new(bsz, self.decoder_num_layers, self.decoder_num_hidden).zero_()))
         return (Variable(weight.new(self.decoder_num_layers, bsz, self.decoder_num_hidden).zero_()),
-                Variable(weight.new(self.decoder_num_layers, bsz, self.decoder_num_hidden).zero_()))
+                Variable(weight.new(self.decoder_num_layers, bsz, self.decoder_num_hidden).zero_()),
+                Variable(weight.new(bsz, self.decoder_num_hidden).zero_()))
 
     def extract_model(self):
         models = dict()
@@ -198,7 +199,7 @@ class AttentionDecoder(nn.Module):
                       * batch_size)).contiguous().cuda()
         for i in range(self.max_decoder_l):
             xt = self.embed(it)  # batch * embedding_dim
-            output, state = self.core(xt, cnn_feats, state)
+            output, state = self.core(xt, cnn_feats, state, )
             output = F.log_softmax(self.logit(output))  # batch * vocab_size
             _, output = torch.max(output, 1)
             it = output
@@ -333,7 +334,6 @@ class AttentionDecoder(nn.Module):
           logprobs: probabilities of words
           new_states: next state list with len=batch_size element_dim (num_layers * 1 * num_hidden)
         """
-        start_time = time.time()
         it = Variable(torch.LongTensor(input), volatile=True).cuda()
         xt = self.embed(it)
         logits, new_states = self.core(xt, context, state, batch_first=True)
@@ -397,7 +397,6 @@ class AttentionDecoder(nn.Module):
 
             # Feed current hypotheses through the model, and recieve new outputs and states
             # logprobs are needed to rank hypotheses
-            start_time = time.time()
             words, logprobs, (new_states_h, new_state_c) \
                 = self.generate(
                     input_feed, state_feed, context_feed,
@@ -459,6 +458,7 @@ class UI2codeAttention(nn.Module):
         self.hidden_mapping = nn.Linear(num_hidden, num_hidden, bias=False)
         self.output_mapping = nn.Linear(2*num_hidden, num_hidden, bias=False)
         self.num_layers = num_layers
+        self.input_mapping = nn.Linear(2*num_hidden, num_hidden)
     def forward(self, xt, context, prev_state):
         """
         xt shape: batch * input_size
@@ -474,6 +474,8 @@ class UI2codeAttention(nn.Module):
             prev_c = prev_state[1][L]
             if L == 0:
                 input = xt
+                prev_h = self.input_mapping(torch.cat((prev_h, prev_state[2]), -1))
+
             else:
                 input = hs[-1]
             next_h, next_c = self.lstm_cells[L](input, (prev_h, prev_c))
@@ -486,8 +488,8 @@ class UI2codeAttention(nn.Module):
         attn = torch.bmm(context, mapped_h.unsqueeze(2)) ## batch * len(feature) * 1
         attn_weight = F.softmax(attn.squeeze(2)) ## batch * len(feature)
         context_combined = torch.bmm(attn_weight.unsqueeze(1), context).squeeze(1) ## batch * num_hidden
-        context_output = self.output_mapping(torch.cat([context_combined, top_h], 1))
-        return context_output, (torch.stack(hs).contiguous(), torch.stack(cs).contiguous())
+        context_output = F.tanh(self.output_mapping(torch.cat([context_combined, top_h], 1)))
+        return context_output, (torch.stack(hs).contiguous(), torch.stack(cs).contiguous(), context_output)
 
         
         
