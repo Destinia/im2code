@@ -59,7 +59,7 @@ class EncoderRNN(nn.Module):
         # self.pos_embedding_bw = nn.Embedding(
         #     opt.max_encoder_l_h, self.n_layers * self.encoder_num_hidden * 2)
         self.lstm = nn.LSTM(
-            self.input_size, self.encoder_num_hidden, self.n_layers, bidirectional=True)
+            self.input_size, self.encoder_num_hidden, self.n_layers, bidirectional=True, bias=False)
         
     def forward(self, img_feats):
         """
@@ -454,7 +454,7 @@ class UI2codeAttention(nn.Module):
         input_size: target_embedding_size
         num_hidden: decoder_num_hidden
         """
-        self.lstm_cells = nn.ModuleList([nn.LSTMCell(input_size, num_hidden) for _ in range(num_layers)])
+        self.lstm_cells = nn.ModuleList([nn.LSTMCell(input_size, num_hidden, bias=False) for _ in range(num_layers)])
         self.hidden_mapping = nn.Linear(num_hidden, num_hidden, bias=False)
         self.output_mapping = nn.Linear(2*num_hidden, num_hidden, bias=False)
         self.num_layers = num_layers
