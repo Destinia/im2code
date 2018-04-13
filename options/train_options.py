@@ -35,5 +35,7 @@ class TrainOptions(BaseOptions):
         self.parser.add_argument('--start_decay_at', type=float, default=999, help='Start decay after this epoch')
         self.parser.add_argument('--lr_policy', type=str, default='lambda', help='learning rate policy: lambda|step|plateau')
         self.parser.add_argument('--lr_decay_iters', type=int, default=50, help='multiply by a gamma every lr_decay_iters iterations')
+        self.parser.add_argument('--start_from', type=str, default='', help='start from ongoing model')
+        self.parser.add_argument('--save_checkpoint_every', type=int, default=10000, help='save checkpoint frequency')
 
         self.isTrain = True

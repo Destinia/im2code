@@ -37,7 +37,7 @@ class BaseOptions():
         self.parser.add_argument('--encoder_num_hidden', type=int, default=256, help='Number of hidden units in encoder cell')
         self.parser.add_argument('--encoder_num_layers', type=int, default=1, help='Number of hidden layers in encoder cell')
         self.parser.add_argument('--decoder_num_layers', type=int, default=1, help='Number of hidden units in decoder cell')
-        self.parser.add_argument('--dropout', type=int, default=0.0, help='Dropout probability') # does support dropout now!!!
+        self.parser.add_argument('--dropout', type=float, default=0.0, help='Dropout probability') # does support dropout now!!!
         self.parser.add_argument('--train_data_path', type=str, default='data/train.lst', help='The path containing data file names and labels. Format per line: image_path characters')
         self.parser.add_argument('--val_data_path', type=str, default='data/validate.lst', help='The path containing validate data file names and labels. Format per line: image_path characters')
         self.parser.add_argument('--test_data_path', type=str, default='data/test_shuffle.lst', help='The path containing validate data file names and labels. Format per line: image_path characters')

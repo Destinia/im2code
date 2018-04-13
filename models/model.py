@@ -140,6 +140,7 @@ class AttentionDecoder(nn.Module):
         self.target_embedding_size = opt.target_embedding_size
         self.max_decoder_l = opt.max_decoder_l
         self.dropout = opt.dropout
+        self.output_dropout = nn.Dropout(opt.dropout)
         self.beam_size = opt.beam_size
         self.vocab = opt.vocab
         self.bos = opt.bos
@@ -185,6 +186,8 @@ class AttentionDecoder(nn.Module):
 
             xt = self.embed(it) # batch * embedding_dim
             output, state = self.core(xt, cnn_feats, state)
+            if self.dropout:
+                output = self.output_dropout(output)
             output = F.log_softmax(self.logit(output)) # batch * vocab_size
             outputs.append(output)
 
@@ -199,14 +202,58 @@ class AttentionDecoder(nn.Module):
                       * batch_size)).contiguous().cuda()
         for i in range(self.max_decoder_l):
             xt = self.embed(it)  # batch * embedding_dim
-            output, state = self.core(xt, cnn_feats, state, )
+            output, state = self.core(xt, cnn_feats, state)
             output = F.log_softmax(self.logit(output))  # batch * vocab_size
             _, output = torch.max(output, 1)
             it = output
             outputs.append(output)
 
         return torch.cat([_.unsqueeze(1) for _ in outputs], 1).data
+    
+    def sample_max(self, cnn_feats, opt={}):
+        sample_max = opt.get('sample_max', 0)
+        temperature = opt.get('temperature', 1.0)
+        batch_size = cnn_feats.size(0)
+        state = self.init_hidden(batch_size)
 
+        seq = []
+        seqLogprobs = []
+        for t in range(self.max_decoder_l + 1):
+            if t == 0:  # input <bos>
+                it = torch.LongTensor(
+                    [self.vocab['<s>']] * batch_size).cuda()
+            elif sample_max:
+                sampleLogprobs, it = torch.max(logprobs.data, 1)
+                it = it.view(-1).long()
+            else:
+                if temperature == 1.0:
+                    prob_prev = torch.exp(logprobs.data).cpu() # fetch prev distribution: shape Nx(M+1)
+                else:
+                    # scale logprobs by temperature
+                    prob_prev = torch.exp(torch.div(logprobs.data, temperature)).cpu()
+                it = torch.multinomial(prob_prev, 1).cuda()
+                sampleLogprobs = logprobs.gather(1, Variable(it, requires_grad=False)) # gather the logprobs at sampled positions
+                it = it.view(-1).long()
+
+            xt = self.embed(Variable(it, requires_grad=False))
+
+            if t >= 1:
+                # stop when all finished
+                if t == 1:
+                    unfinished = it > 0
+                else:
+                    unfinished = unfinished * (it > 0)
+                if unfinished.sum() == 0:
+                    break
+                it = it * unfinished.type_as(it)
+                seq.append(it)  # seq[t] the input of t+2 time step
+
+                seqLogprobs.append(sampleLogprobs.view(-1))
+
+            output, state = self.core(xt, cnn_feats, state)
+            logprobs = F.log_softmax(self.logit(output))
+
+        return torch.cat([_.unsqueeze(1) for _ in seq], 1), torch.cat([_.unsqueeze(1) for _ in seqLogprobs], 1)
     def decode_beam(self, context):
         """Decode a minibatch."""
 
@@ -454,11 +501,11 @@ class UI2codeAttention(nn.Module):
         input_size: target_embedding_size
         num_hidden: decoder_num_hidden
         """
-        self.lstm_cells = nn.ModuleList([nn.LSTMCell(input_size, num_hidden, bias=False) for _ in range(num_layers)])
+        self.lstm_cells = nn.ModuleList([nn.LSTMCell(input_size+num_hidden, num_hidden, bias=False) for _ in range(num_layers)])
         self.hidden_mapping = nn.Linear(num_hidden, num_hidden, bias=False)
         self.output_mapping = nn.Linear(2*num_hidden, num_hidden, bias=False)
         self.num_layers = num_layers
-        self.input_mapping = nn.Linear(2*num_hidden, num_hidden)
+        # self.input_mapping = nn.Linear(2*num_hidden, num_hidden)
     def forward(self, xt, context, prev_state):
         """
         xt shape: batch * input_size
@@ -473,8 +520,8 @@ class UI2codeAttention(nn.Module):
             prev_h = prev_state[0][L]
             prev_c = prev_state[1][L]
             if L == 0:
-                input = xt
-                prev_h = self.input_mapping(torch.cat((prev_h, prev_state[2]), -1))
+                input = torch.cat([xt, prev_state[2]],-1)
+                # prev_h = self.input_mapping(torch.cat((prev_h, prev_state[2]), -1))
 
             else:
                 input = hs[-1]

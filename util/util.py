@@ -5,6 +5,7 @@ import heapq
 from PIL import Image
 from torch.nn.utils import clip_grad_norm
 import torch.nn as nn
+from torch.autograd import Variable
 import os
 
 
@@ -195,6 +196,22 @@ class LanguageModelCriterion(nn.Module):
         target = to_contiguous(target).view(-1, 1)
         mask = to_contiguous(mask).view(-1, 1)
         output = - input.gather(1, target) * mask
+        output = torch.sum(output) / torch.sum(mask)
+
+        return output
+
+
+class RewardCriterion(nn.Module):
+    def __init__(self):
+        super(RewardCriterion, self).__init__()
+
+    def forward(self, input, seq, reward):
+        reward = to_contiguous(reward.repeat(input.size(1))).view(-1)
+        input = to_contiguous(input).view(-1)
+        mask = (seq > 0).float()
+        mask = to_contiguous(
+            torch.cat([mask.new(mask.size(0), 1).fill_(1), mask[:, :-1]], 1)).view(-1)
+        output = - input * reward * Variable(mask)
         output = torch.sum(output) / torch.sum(mask)
 
         return output
