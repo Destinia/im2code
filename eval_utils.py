@@ -1,6 +1,9 @@
 import Levenshtein
 from zss import Node, simple_distance
 
+from multiprocessing import Pool
+import numpy as np
+
 
 def wordErrorRate(results, targets, eos_index):
     def tokens2str(tokens):
@@ -61,6 +64,11 @@ def build_tree(seq):
             return root
     return root
 
-
 def tree_distance(r, t):
-    return simple_distance(build_tree(r), build_tree(t))/len(t)
+    return 1 - min(1, simple_distance(build_tree(r), build_tree(t)) / len(t))
+
+def tree_distances_multithread(results, targets):
+    with Pool(processes=8) as pool:
+        tree_distance_all = pool.starmap(tree_distance, zip(results, targets))
+    
+    return np.array(tree_distance_all)

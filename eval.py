@@ -7,12 +7,12 @@ from torch.autograd import Variable
 
 from models.model import EncoderCNN, EncoderRNN, AttentionDecoder
 import pickle
-from eval_utils import wordErrorRate, tree_distance, wordErrorRateOrigin
-from multiprocessing import Pool
+from eval_utils import wordErrorRate, tree_distances_multithread, wordErrorRateOrigin
 import time
+import numpy as np
 
 def main(opt):
-    data_loader = UI2codeDataloader(opt, phase='val')
+    data_loader = UI2codeDataloader(opt, phase=opt.phase)
     opt.target_vocab_size = len(opt.vocab)
     dataset = data_loader.load_data()
     dataset_size = len(data_loader)
@@ -37,7 +37,7 @@ def main(opt):
 
         features = encoderCNN(images)
         encoded_features = encoderRNN(features)
-        output_greedy = decoder.decode(encoded_features)
+        output_greedy = decoder.decode(encoded_features).cpu().numpy()
         # beam_output, _ = decoder.decode_beam(encoded_features)
         # accuracy_beam = wordErrorRate(
         #     beam_output, captions[:, 1:], opt.eos)
@@ -51,13 +51,9 @@ def main(opt):
             output_greedy, captions[:, 1:], opt.eos)
         # accuracy_tree = treeEval.distance(beam_output, captions.data[:, 1:])
         # tree_distance_beam = treeEval.distance(beam_output, captions.data[:, 1:])
-        output_greedy = output_greedy.cpu().numpy()
         # start_time = time.time()
-        with Pool(processes=16) as pool:
-            tree_distance_greedy = pool.starmap(tree_distance, zip(
-                output_greedy, captions.numpy()[:, 1:]))
-            tree_distance_greedy_accuracy = sum(tree_distance_greedy)/len(tree_distance_greedy)
-        accuracy_tree.append(tree_distance_greedy_accuracy)
+        accuracy_tree.append(np.average(tree_distances_multithread(
+            output_greedy, captions[:, 1:])))
 
         ## save for test
         accuracy_origin.append(accuracy_greedy_origin)
@@ -71,7 +67,7 @@ def main(opt):
           (sum(accuracy_origin) / len(accuracy_origin)))
     print('Accuracy greedy search: %.4f' %
           (sum(accuracy_greedies) / len(accuracy_greedies)))
-    print('Accuracy greedy search: %.4f' %
+    print('Tree Accuracy greedy search: %.4f' %
           (sum(accuracy_tree) / len(accuracy_tree)))
 if __name__ == '__main__':
     opt = TestOptions().parse()
