@@ -14,26 +14,37 @@ from torch.nn.utils import clip_grad_norm
 from torch.nn.utils.rnn import pack_padded_sequence
 from models.model import EncoderCNN, EncoderRNN, AttentionDecoder, SpatialEncoderRNN
 import util.util as utils
-from eval_utils import wordErrorRate
+from eval_utils import wordErrorRate, tree_distances_multithread
+from tensorboardX import SummaryWriter
 
-try:
-    import tensorflow as tf
-except ImportError:
-    print("Tensorflow not installed; No tensorboard logging.")
-    tf = None
 
-def add_summary_value(writer, key, value, iteration):
-    summary = tf.Summary(value=[tf.Summary.Value(tag=key, simple_value=value)])
-    writer.add_summary(summary, iteration)
-
-# def validate(model, loader):
+def validate(opt, loader, models):
+    val_accuracy = []
+    ted_val_accuracy = []
+    encoderCNN, encoderRNN, decoder = models
+    for (images, captions, masks) in loader:
+        images = Variable(images, requires_grad=False).cuda()
+        captions = Variable(captions, requires_grad=False).cuda()
+        masks = Variable(masks, requires_grad=False).cuda()
+        features = encoderCNN(images)
+        encoded_features = encoderRNN(features)
+        greedy_outputs = decoder.decode(encoded_features)
+        greedy_outputs = greedy_outputs.cpu().numpy()
+        gt = captions.data.cpu().numpy()[:, 1:]
+        accuracy = wordErrorRate(
+            greedy_outputs, gt, opt.eos)
+        ted_accuracy = tree_distances_multithread(
+            greedy_outputs, gt[:, 1:])
+        val_accuracy.append(accuracy)
+        ted_val_accuracy.append(np.average(ted_accuracy))
+    return sum(val_accuracy) / len(val_accuracy), sum(ted_val_accuracy) / len(ted_val_accuracy)
 
 
 def train(opt):
     data_loader = UI2codeDataloader(opt)
     val_data_loader = UI2codeDataloader(opt, phase='val')
     dataset = data_loader.load_data()
-    tf_summary_writer = tf and tf.summary.FileWriter(opt.expr_dir)
+    writer = SummaryWriter(opt.expr_dir)
 
     # model = create_model(opt)
     # visualizer = Visualizer(opt)
@@ -88,11 +99,9 @@ def train(opt):
                 # print('Epoch [%d/%d], Step [%d/%d], Loss: %.4f'
                 #       % (epoch+1, opt.num_epochs, total_steps, dataset_size,
                 #          loss.data[0]))
-                if tf is not None:
-                    add_summary_value(tf_summary_writer, 'train_loss', train_loss, total_steps)
-                    add_summary_value(tf_summary_writer, 'learning_rate', opt.current_lr, total_steps)
-                    # add_summary_value(tf_summary_writer, 'scheduled_sampling_prob', model.ss_prob, total_steps)
-                    tf_summary_writer.flush()
+                writer.add_scalar('train_loss', train_loss, total_steps)
+                writer.add_scalar('learning_rate', opt.current_lr, total_steps)
+                # add_summary_value(tf_summary_writer, 'scheduled_sampling_prob', model.ss_prob, total_steps)
             ## validation
             # if total_steps % opt.save_latest_freq == 0:
             #     print('saving the latest model (epoch %d, total_steps %d)' %
@@ -102,21 +111,12 @@ def train(opt):
             #     torch.save(encoderCNN.state_dict(), os.path.join(opt.checkpoint_path, 'encoder-cnn-%d-%d.pkl' % (epoch + 1, total_steps)))
 
         print('the end of epoch %d, iters %d' % (epoch, total_steps))
-        val_accuracy = []
-        for (images, captions, masks) in val_data_loader:
-            images = Variable(images, requires_grad=False).cuda()
-            captions = Variable(captions, requires_grad=False).cuda()
-            masks = Variable(masks, requires_grad=False).cuda()
-            features = encoderCNN(images)
-            encoded_features = encoderRNN(features)
-            greedy_outputs = decoder.decode(encoded_features)
-            accuracy = wordErrorRate(
-                greedy_outputs, captions.data[:, 1:], opt.eos)
-            val_accuracy.append(accuracy)
-        cur_val_accuracy = sum(val_accuracy) / len(val_accuracy)
+
+        cur_val_accuracy, cur_ted_val_accuracy = validate(
+            opt, val_data_loader, (encoderCNN, encoderRNN, decoder))
         
-        add_summary_value(tf_summary_writer, 'val_accuracy',
-                          cur_val_accuracy, epoch)
+        writer.add_scalar('val_accuracy', cur_val_accuracy, epoch)
+        writer.add_scalar('val_ted_accuracy', cur_ted_val_accuracy, epoch)
         if cur_val_accuracy > best_val_accuracy:
             best_val_accuracy = cur_val_accuracy
             print('save best model at Epoch: %d'%(epoch))
@@ -128,26 +128,23 @@ def train(opt):
                 opt.expr_dir, 'encoder-cnn-best.pkl'))
 
             ## update learning rate
-            opt.current_lr = opt.current_lr * opt.lr_decay
-            print('update learning rate: %.4f' % (opt.current_lr))
-            utils.set_lr(optimizer, opt.current_lr)
+            opt.current_lr = max(opt.current_lr * opt.lr_decay,
+                                opt.learning_rate_min)
+        print('update learning rate: %.4f' % (opt.current_lr))
+        utils.set_lr(optimizer, opt.current_lr)
 
         print('validation accuracy: %.4f\nBest validation accuracy: %.4f' %
               (cur_val_accuracy, best_val_accuracy))
 
-
-
-            
         torch.save(decoder.state_dict(),
                    os.path.join(opt.expr_dir,
-                                'decoder-%d.pkl' % (epoch + 1)))
+                                'decoder.pkl'))
         torch.save(encoderRNN.state_dict(),
                    os.path.join(opt.expr_dir,
-                                'encoder-rnn-%d.pkl' % (epoch + 1)))
+                                'encoder-rnn.pkl'))
         torch.save(encoderCNN.state_dict(),
                    os.path.join(opt.expr_dir,
-                                'encoder-cnn-%d.pkl' % (epoch + 1)))
-
+                                'encoder-cnn.pkl'))
         print('End of epoch %d \t Time Taken: %d sec' %
             (epoch, time.time() - epoch_start_time))
 
