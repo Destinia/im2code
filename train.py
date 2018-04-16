@@ -127,11 +127,12 @@ def train(opt):
             torch.save(encoderCNN.state_dict(), os.path.join(
                 opt.expr_dir, 'encoder-cnn-best.pkl'))
 
-            ## update learning rate
+        ## update learning rate when acc not growth
+        if cur_val_accuracy < best_val_accuracy:
             opt.current_lr = max(opt.current_lr * opt.lr_decay,
                                 opt.learning_rate_min)
-        print('update learning rate: %.4f' % (opt.current_lr))
-        utils.set_lr(optimizer, opt.current_lr)
+            print('update learning rate: %.4f' % (opt.current_lr))
+            utils.set_lr(optimizer, opt.current_lr)
 
         print('validation accuracy: %.4f\nBest validation accuracy: %.4f' %
               (cur_val_accuracy, best_val_accuracy))
