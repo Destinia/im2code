@@ -37,5 +37,6 @@ class TrainOptions(BaseOptions):
         self.parser.add_argument('--lr_decay_iters', type=int, default=50, help='multiply by a gamma every lr_decay_iters iterations')
         self.parser.add_argument('--start_from', type=str, default='', help='start from ongoing model')
         self.parser.add_argument('--save_checkpoint_every', type=int, default=10000, help='save checkpoint frequency')
+        self.parser.add_argument('--dropout', type=float, default=0.0, help='Dropout probability') # does support dropout now!!!
 
         self.isTrain = True

@@ -9,7 +9,7 @@ def wordErrorRate(results, targets, eos_index):
     def tokens2str(tokens):
         ret = ''
         for t in tokens:
-            if int(t) == eos_index:
+            if int(t) < 3:
                 break
             ret = ret + chr(int(t)) + ' '
         return ret
