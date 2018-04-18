@@ -6,7 +6,7 @@ from torch.nn.utils.rnn import pack_padded_sequence
 from torch.autograd import Variable
 from torch.nn.utils.rnn import pack_padded_sequence
 from .BeamSearch import Beam
-from util.util import Sequence, TopN
+from util.util import Sequence, TopN, beam_replicate
 
 def conv3x3(in_planes, out_planes, stride=1):
     "3x3 convolution with padding"
@@ -148,7 +148,6 @@ class AttentionDecoder(nn.Module):
         self.embed = nn.Sequential(nn.Embedding(self.target_vocab_size, self.target_embedding_size),
                                    nn.ReLU(),
                                    nn.Dropout(self.dropout))
-        self.output_projector = nn.Linear(self.decoder_num_hidden, self.target_vocab_size)
         self.core = UI2codeAttention(self.target_embedding_size, self.decoder_num_hidden, self.decoder_num_layers)
         self.logit = nn.Linear(self.decoder_num_hidden, self.target_vocab_size)
 
@@ -165,7 +164,6 @@ class AttentionDecoder(nn.Module):
     def extract_model(self):
         models = dict()
         models['embed'] = self.embed
-        models['output_projector'] = self.output_projector
         models['core'] = self.core
         models['logit'] = self.logit
 
@@ -181,7 +179,7 @@ class AttentionDecoder(nn.Module):
 
         outputs = []
         
-        for i in range(seq.size(1)):
+        for i in range(seq.size(1) - 1):
             it = seq[:, i].clone()
 
             xt = self.embed(it) # batch * embedding_dim
@@ -490,8 +488,66 @@ class AttentionDecoder(nn.Module):
                 complete_sequences[b] = partial_sequences[b]
         seqs = [complete.extract(sort=True)[0]
                 for complete in complete_sequences]
-        return [s.sentence for s in seqs]
+        return np.array([s.sentence for s in seqs])
 
+    def beam(self, context):
+        batch_size = context.size(0)
+        beam_size = self.beam_size
+        beam_context = context.unsqueeze(1).expand(context.size(0), beam_size, context.size(1), context.size(2)).contiguous().view(-1, context.size(1), context.size(2))
+        state = self.init_hidden(batch_size)
+        current_indices_history = []
+        beam_parents_history = []
+        for t in range(self.max_decoder_l):
+            if t == 0:
+                beam_input = Variable(torch.LongTensor([self.bos]
+                      * batch_size), requires_grad=False).contiguous().cuda()
+                xt = self.embed(beam_input)
+                out, next_state = self.core(xt, context, state)
+            else:
+                beam_input = Variable(beam_input, requires_grad=False).contiguous().cuda()
+                xt = self.embed(beam_input)
+                out, next_state = self.core(xt, beam_context, state)
+            probs = F.log_softmax(self.logit(out)).data
+            if t == 0:
+                beam_score, raw_indices = probs.topk(beam_size)
+                current_indices = raw_indices
+            else:
+                probs.select(1, 0).masked_fill_(beam_input.eq(self.eos).data, 0.0)
+                probs.select(1, 0).masked_fill_(beam_input.eq(0).data, 0.0)
+                total_scores = (probs.view(-1, beam_size, self.target_vocab_size) + beam_score.view(-1, beam_size, 1).expand(batch_size, beam_size, self.target_vocab_size)).contiguous().view(-1, beam_size * self.target_vocab_size)
+
+                beam_score, raw_indices = total_scores.topk(beam_size)
+                current_indices = raw_indices.fmod(self.target_vocab_size)
+            beam_parents = raw_indices/self.target_vocab_size
+            beam_input = current_indices.view(-1)
+            beam_parents_history.append(beam_parents.clone())
+            current_indices_history.append(current_indices.clone())
+            state_h = Variable(beam_replicate(next_state[0].squeeze(0).data, self.beam_size).index_select(
+                0, beam_parents.view(-1) + torch.arange(0, batch_size * beam_size, beam_size).long().cuda().contiguous().view(batch_size, 1).expand(batch_size, beam_size).contiguous().view(-1)))
+            state_h = state_h.unsqueeze(0)
+            state_c = Variable(beam_replicate(next_state[1].squeeze(0).data, self.beam_size).index_select(
+                0, beam_parents.view(-1) + torch.arange(0, batch_size * beam_size, beam_size).long().cuda().contiguous().view(batch_size, 1).expand(batch_size, beam_size).contiguous().view(-1)))
+            state_c = state_c.unsqueeze(0)
+            state_o = Variable(beam_replicate(next_state[2].data, self.beam_size).index_select(
+                0, beam_parents.view(-1) + torch.arange(0, batch_size * beam_size, beam_size).long().cuda().contiguous().view(batch_size, 1).expand(batch_size, beam_size).contiguous().view(-1)))
+            state = (state_h, state_c, state_o)
+            
+        scores, indices = torch.max(beam_score, 1)
+        scores = scores.view(-1)
+        indices = indices.view(-1)
+        current_indices = current_indices_history[-1].view(-1).index_select(
+            0, indices + torch.arange(0, batch_size * beam_size, beam_size).long().cuda())
+        
+        results = torch.zeros(batch_size, self.max_decoder_l)
+        for t in range(self.max_decoder_l-1 , -1, -1):
+            results[:, t].copy_(current_indices)
+            indices = beam_parents_history[t].view(-1).index_select(
+                0, indices + torch.arange(0, batch_size * beam_size, beam_size).long().cuda())
+            if t > 0:
+                current_indices = current_indices_history[t - 1].view(-1).index_select(
+                    0, indices + torch.arange(0, batch_size * beam_size, beam_size).long().cuda())
+
+        return results
 
 
 class UI2codeAttention(nn.Module):

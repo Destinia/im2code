@@ -184,6 +184,29 @@ class TopN(object):
         """Returns the TopN to an empty state."""
         self._data = []
 
+
+def beam_replicate(state, beam_size):
+    if state.dim() == 1:
+        batch_size = state.size(0)
+        state = to_contiguous(state)
+        temp_state = state.view(batch_size, 1).expand(batch_size, beam_size)
+        return to_contiguous(temp_state).view(-1)
+    elif state.dim() == 2:
+        batch_size = state.size(0)
+        num_hidden = state.size(1)
+        state = to_contiguous(state)
+        temp_state = state.view(batch_size, 1, num_hidden).expand(
+            batch_size, beam_size, num_hidden)
+        return to_contiguous(temp_state).view(-1, num_hidden)
+    elif state.dim() == 3:
+        batch_size = state.size(0)
+        source_l = state.size(1)
+        num_hidden = state.size(2)
+        state = to_contiguous(state)
+        temp_state = state.view(batch_size, 1, source_l, num_hidden).expand(
+            batch_size, beam_size, source_l, num_hidden)
+        return to_contiguous(temp_state).view(-1, source_l, num_hidden)
+    raise RuntimeError('beam_replicate doesn\'t support dimension except for 1, 2, 3 ')
 class LanguageModelCriterion(nn.Module):
     def __init__(self):
         super(LanguageModelCriterion, self).__init__()

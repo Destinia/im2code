@@ -86,7 +86,7 @@ def train(opt):
             features = encoderCNN(images)
             encoded_features = encoderRNN(features)
             outputs = decoder(encoded_features, captions)
-            loss = criterion(outputs[:, :-1], captions[:,1:], masks[:,1:])
+            loss = criterion(outputs, captions[:,1:], masks[:,1:])
             optimizer.zero_grad()
             loss.backward()
             clip_grad_norm(params, opt.norm_grad_clip)
