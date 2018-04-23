@@ -11,6 +11,14 @@ from eval_utils import wordErrorRate, tree_distances_multithread, wordErrorRateO
 import time
 import numpy as np
 
+def test_len(tokens):
+    l = 0
+    for t in tokens:
+        if t == 2:
+            return l
+        l = l + 1
+    return l
+
 def main(opt):
     data_loader = UI2codeDataloader(opt, phase=opt.phase)
     opt.target_vocab_size = len(opt.vocab)
@@ -31,13 +39,14 @@ def main(opt):
         encoderRNN.cuda()
         decoder.cuda()
     accuracy_origin, accuracy_greedies, accuracy_tree = [], [], []
+    average_lens = []
     for (images, captions, masks) in tqdm(data_loader):
         images = Variable(images, requires_grad=False).cuda()
         masks = Variable(masks, requires_grad=False).cuda()
 
         features = encoderCNN(images)
         encoded_features = encoderRNN(features)
-        output_greedy = decoder.decode(encoded_features).cpu().numpy()
+        output_greedy = decoder.beam(encoded_features).cpu().numpy()
         # beam_output, _ = decoder.decode_beam(encoded_features)
         # accuracy_beam = wordErrorRate(
         #     beam_output, captions[:, 1:], opt.eos)
@@ -56,6 +65,8 @@ def main(opt):
             output_greedy, captions[:, 1:])))
 
         ## save for test
+        avg_l = [test_len(r) for r in output_greedy]
+        average_lens.append(sum(avg_l)/len(avg_l))
         accuracy_origin.append(accuracy_greedy_origin)
         accuracy_greedies.append(accuracy_greedy)
         # accuracy_beams.append(accuracy_beam)
@@ -69,6 +80,8 @@ def main(opt):
           (sum(accuracy_greedies) / len(accuracy_greedies)))
     print('Tree Accuracy greedy search: %.4f' %
           (sum(accuracy_tree) / len(accuracy_tree)))
+    print('Average len: %.4f' %
+          (sum(average_lens) / len(average_lens)))
 if __name__ == '__main__':
     opt = TestOptions().parse()
     main(opt)

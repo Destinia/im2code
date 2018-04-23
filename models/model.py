@@ -45,7 +45,6 @@ class EncoderCNN(nn.Module):
         # output = torch.unbind(output, 1) # len(H) list of (batch * W * 512)
         return output
 
-
 class EncoderRNN(nn.Module):
     def __init__(self, opt):
         super(EncoderRNN, self).__init__()
@@ -59,58 +58,7 @@ class EncoderRNN(nn.Module):
             opt.max_encoder_l_h, self.n_layers * self.encoder_num_hidden * 2)
         self.pos_embedding_bw = nn.Embedding(
             opt.max_encoder_l_h, self.n_layers * self.encoder_num_hidden * 2)
-        self.lstm_fw = nn.LSTMCell(
-            self.input_size, self.encoder_num_hidden, bias=False)
-        self.lstm_bw = nn.LSTMCell(
-            self.input_size, self.encoder_num_hidden, bias=False)
-
-    def forward(self, img_feats):
-        """
-        img_feature shape: batch * H * W * hidden_dim
-        """
-        assert(len(img_feats) < self.max_encoder_l_h)
-        batch_size = img_feats.size(0)
-        imgH = img_feats.size(1)
-        imgW = img_feats.size(2)
-        outputs = []
-        for i in range(imgH):  # imgSeq height
-            pos = Variable(torch.LongTensor(
-                [i] * batch_size), requires_grad=False).cuda().contiguous()  # batch * (num_layer * 2) * hidden_dim
-            # (num_layer * 2) * batch * hidden_dim
-            pos_embedding_fw = self.pos_embedding_fw(pos)
-            pos_embedding_bw = self.pos_embedding_bw(pos)
-            states_fw = torch.unbind(
-                pos_embedding_fw.view(-1, 2, self.encoder_num_hidden), 1)
-            output_fw = []
-            states_bw = torch.unbind(
-                pos_embedding_bw.view(-1, 2, self.encoder_num_hidden), 1)
-            output_bw = []
-            source = img_feats[:, i].transpose(0, 1)  # W * batch * hidden_dim
-            for j in range(imgW):
-                states_fw = self.lstm_fw(source[j], states_fw)
-                output_fw.append(states_fw[0])
-            outputs_fw = torch.cat([_.unsqueeze(1) for _ in output_fw], 1)
-            for j in range(imgW - 1, -1, -1):
-                states_bw = self.lstm_bw(source[j], states_bw)
-                output_bw.append(states_bw[0])
-            outputs_bw = torch.cat([_.unsqueeze(1) for _ in reversed(output_bw)], 1)
-            outputs.append(torch.cat([outputs_fw, outputs_bw], -1))
-        return torch.cat(outputs, 1)
-
-class EncoderRNN_old(nn.Module):
-    def __init__(self, opt):
-        super(EncoderRNN, self).__init__()
-        self.batch_size = opt.batch_size
-        self.input_size = opt.cnn_feature_size
-        self.max_encoder_l_h = opt.max_encoder_l_h
-        self.encoder_num_hidden = opt.encoder_num_hidden
-        self.n_layers = opt.encoder_num_layers
-        # 4* for bidirectional and (h, c)
-        self.pos_embedding_fw = nn.Embedding(
-            opt.max_encoder_l_h, self.n_layers * self.encoder_num_hidden * 2)
-        self.pos_embedding_bw = nn.Embedding(
-            opt.max_encoder_l_h, self.n_layers * self.encoder_num_hidden * 2)
-        self.lstm = nn.LSTMCell(
+        self.lstm = nn.LSTM(
             self.input_size, self.encoder_num_hidden, self.n_layers, bidirectional=True, bias=False, batch_first=True)
 
     def forward(self, img_feats):

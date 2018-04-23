@@ -52,6 +52,8 @@ class BaseOptions():
             self.initialize()
         self.opt = self.parser.parse_args()
         self.opt.isTrain = self.isTrain   # train or test
+        if not self.isTrain:
+            self.opt.dropout = 0.0
         self.opt.max_encoder_l_w = math.floor(self.opt.max_image_width / 8.0)
         self.opt.max_encoder_l_h = math.floor(self.opt.max_image_height / 8.0)
         self.opt.decoder_num_hidden = 2 * self.opt.encoder_num_hidden

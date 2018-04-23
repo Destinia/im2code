@@ -89,6 +89,7 @@ def train(opt):
             loss = criterion(outputs, captions[:,1:], masks[:,1:])
             optimizer.zero_grad()
             loss.backward()
+            # utils.grad_clip(params, opt.norm_grad_clip)
             clip_grad_norm(params, opt.norm_grad_clip)
             optimizer.step()
             train_loss = loss.data[0]
