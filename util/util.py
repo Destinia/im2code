@@ -251,9 +251,8 @@ def clip_norm_gradient(optimizer, grad_clip):
 
 
 def grad_clip(params, max_norm):
-    for p in params:
+    for name, p in params:
         norm = p.grad.data.norm()
-        print(norm)
         if norm > max_norm:
             p.grad.data.mul_(max_norm/norm)
 

@@ -68,7 +68,7 @@ def train(opt):
 
     weight = torch.ones(opt.target_vocab_size).cuda()
     weight[0] = 0
-    criterion = torch.nn.NLLLoss(weight=weight, size_average=False, re)
+    criterion = torch.nn.NLLLoss(weight=weight, size_average=False)
     opt.current_lr = opt.learning_rate
     optimizer_ec = torch.optim.SGD(encoderCNN.parameters(), lr=opt.current_lr)
     optimizer_er = torch.optim.SGD(encoderRNN.parameters(), lr=opt.current_lr)
@@ -106,8 +106,7 @@ def train(opt):
             optimizer_de.zero_grad()
             for t in range(captions.size(1)-1):
                 loss += criterion(outputs[:, t], captions[:, 1 + t]) / batch_size
-            
-            .backward()
+            loss.backward()
             utils.grad_clip(encoderCNN.named_parameters(), opt.norm_grad_clip)
             utils.grad_clip(encoderRNN.named_parameters(), opt.norm_grad_clip)
             utils.grad_clip(decoder.named_parameters(), opt.norm_grad_clip)

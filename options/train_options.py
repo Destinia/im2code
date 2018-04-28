@@ -36,6 +36,10 @@ class TrainOptions(BaseOptions):
         self.parser.add_argument('--lr_policy', type=str, default='lambda', help='learning rate policy: lambda|step|plateau')
         self.parser.add_argument('--lr_decay_iters', type=int, default=50, help='multiply by a gamma every lr_decay_iters iterations')
         self.parser.add_argument('--start_from', type=str, default='', help='start from ongoing model')
+        self.parser.add_argument('--scheduled_sampling_start', type=int, default=-1, help='at what iteration to start decay gt probability')
+        self.parser.add_argument('--scheduled_sampling_increase_prob', type=float, default=0.05,help='How much to update the prob')
+        self.parser.add_argument('--scheduled_sampling_increase_every', type=int, default=1,help='How much to update the prob')
+        self.parser.add_argument('--scheduled_sampling_max_prob', type=float, default=0.25, help='Maximum scheduled sampling prob.')
         self.parser.add_argument('--save_checkpoint_every', type=int, default=10000, help='save checkpoint frequency')
         self.parser.add_argument('--dropout', type=float, default=0.0, help='Dropout probability') # does support dropout now!!!
 

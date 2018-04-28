@@ -7,6 +7,7 @@ from torch.autograd import Variable
 from torch.nn.utils.rnn import pack_padded_sequence
 from .BeamSearch import Beam
 from util.util import Sequence, TopN, beam_replicate
+import random
 
 def conv3x3(in_planes, out_planes, stride=1):
     "3x3 convolution with padding"
@@ -153,6 +154,7 @@ class AttentionDecoder(nn.Module):
         self.embed = nn.Embedding(self.target_vocab_size, self.target_embedding_size)
         self.core = UI2codeAttention(self.target_embedding_size, self.decoder_num_hidden, self.decoder_num_layers)
         self.logit = nn.Linear(self.decoder_num_hidden, self.target_vocab_size)
+        self.ss_prob = 0.0
 
 
     def init_hidden(self, bsz, batch_first=False):
@@ -160,8 +162,8 @@ class AttentionDecoder(nn.Module):
         if batch_first:
             return (Variable(weight.new(bsz, self.decoder_num_layers, self.decoder_num_hidden).zero_()),
                     Variable(weight.new(bsz, self.decoder_num_layers, self.decoder_num_hidden).zero_()))
-        return (Variable(weight.new(self.decoder_num_layers, bsz, self.decoder_num_hidden).zero_()),
-                Variable(weight.new(self.decoder_num_layers, bsz, self.decoder_num_hidden).zero_()),
+        return (Variable(weight.new(bsz, self.decoder_num_hidden).zero_()),
+                Variable(weight.new(bsz, self.decoder_num_hidden).zero_()),
                 Variable(weight.new(bsz, self.decoder_num_hidden).zero_()))
 
     def extract_model(self):
@@ -181,9 +183,27 @@ class AttentionDecoder(nn.Module):
         state = self.init_hidden(batch_size)
 
         outputs = []
-        
+
+
         for i in range(seq.size(1) - 1):
-            it = seq[:, i].clone()
+            if i == 0:
+                it = seq[:, i].clone()
+            else:
+                if i >= 2 and self.ss_prob > 0.0: # otherwiste no need to sample
+                    sample_prob = cnn_feats.data.new(batch_size).uniform_(0, 1)
+                    sample_mask = sample_prob < self.ss_prob
+                    if sample_mask.sum() == 0:
+                        it = seq[:, i].clone()
+                    else:
+                        sample_ind = sample_mask.nonzero().view(-1)
+                        it = seq[:, i].data.clone()
+                        #prob_prev = torch.exp(outputs[-1].data.index_select(0, sample_ind)) # fetch prev distribution: shape Nx(M+1)
+                        #it.index_copy_(0, sample_ind, torch.multinomial(prob_prev, 1).view(-1))
+                        prob_prev = torch.exp(outputs[-1].data) # fetch prev distribution: shape Nx(M+1)
+                        it.index_copy_(0, sample_ind, torch.multinomial(prob_prev, 1).view(-1).index_select(0, sample_ind))
+                        it = Variable(it, requires_grad=False)
+                else:
+                    it = seq[:, i].clone()
 
             xt = self.embed(it) # batch * embedding_dim
             output, state = self.core(xt, cnn_feats, state)
@@ -210,6 +230,26 @@ class AttentionDecoder(nn.Module):
             outputs.append(output)
 
         return torch.cat([_.unsqueeze(1) for _ in outputs], 1).data
+
+    def vis(self, cnn_feats):
+        batch_size = cnn_feats.size(0)
+        state = self.init_hidden(batch_size)
+
+        outputs = []
+        attn = []
+        it = Variable(torch.LongTensor([self.vocab['<s>']]
+                      * batch_size)).contiguous().cuda()
+        for i in range(self.max_decoder_l):
+            xt = self.embed(it)  # batch * embedding_dim
+            output, state = self.core.vis(xt, cnn_feats, state)
+            output = F.log_softmax(self.logit(output))  # batch * vocab_size
+            _, output = torch.max(output, 1)
+            it = output
+            outputs.append(output)
+            attn.append(state[-1])
+
+        return torch.cat([_.unsqueeze(1) for _ in outputs], 1).data, torch.cat([_.unsqueeze(1) for _ in attn], 1).data
+
     
     def sample_max(self, cnn_feats, opt={}):
         sample_max = opt.get('sample_max', 0)
@@ -391,7 +431,7 @@ class AttentionDecoder(nn.Module):
         # print('check 2:', time.time() - start_time)
         return words, logprobs, new_states
 
-    def beam_search(self, context):
+    # def beam_search(self, context):
         """Runs beam search sequence generation on a single image.
         Args:
           initial_input: An initial input for the model -
@@ -498,6 +538,7 @@ class AttentionDecoder(nn.Module):
         beam_size = self.beam_size
         beam_context = context.unsqueeze(1).expand(context.size(0), beam_size, context.size(1), context.size(2)).contiguous().view(-1, context.size(1), context.size(2))
         state = self.init_hidden(batch_size)
+        seq_len = torch.ones(batch_size, self.beam_size).cuda()
         current_indices_history = []
         beam_parents_history = []
         for t in range(self.max_decoder_l):
@@ -512,25 +553,30 @@ class AttentionDecoder(nn.Module):
                 out, next_state = self.core(xt, beam_context, state)
             probs = F.log_softmax(self.logit(out)).data
             if t == 0:
-                beam_score, raw_indices = probs.topk(beam_size)
+                beam_score, raw_indices = probs.topk(beam_size, -1)
                 current_indices = raw_indices
             else:
+                # cond = beam_input.eq(0)+seq_len.eq(1)
                 probs.select(1, 0).masked_fill_(beam_input.eq(self.eos).data, 0.0)
                 probs.select(1, 0).masked_fill_(beam_input.eq(0).data, 0.0)
+                # seq_len.masked_fill_((beam_input.eq(self.eos).data + seq_len.eq(1)).eq(2), t-1)
+                # # seq_len.masked_fill_(beam_input.eq(0).data, t-1)
                 total_scores = (probs.view(-1, beam_size, self.target_vocab_size) + beam_score.view(-1, beam_size, 1).expand(batch_size, beam_size, self.target_vocab_size)).contiguous().view(-1, beam_size * self.target_vocab_size)
 
-                beam_score, raw_indices = total_scores.topk(beam_size)
+                beam_score, raw_indices = total_scores.topk(beam_size, -1)
                 current_indices = raw_indices.fmod(self.target_vocab_size)
             beam_parents = raw_indices/self.target_vocab_size
+            # if t < 10:
+            #     print(t, beam_score, beam_parents)
             beam_input = current_indices.view(-1)
             beam_parents_history.append(beam_parents.clone())
             current_indices_history.append(current_indices.clone())
             state_h = Variable(beam_replicate(next_state[0].squeeze(0).data, self.beam_size).index_select(
                 0, beam_parents.view(-1) + torch.arange(0, batch_size * beam_size, beam_size).long().cuda().contiguous().view(batch_size, 1).expand(batch_size, beam_size).contiguous().view(-1)))
-            state_h = state_h.unsqueeze(0)
+            # state_h = state_h.unsqueeze(0)
             state_c = Variable(beam_replicate(next_state[1].squeeze(0).data, self.beam_size).index_select(
                 0, beam_parents.view(-1) + torch.arange(0, batch_size * beam_size, beam_size).long().cuda().contiguous().view(batch_size, 1).expand(batch_size, beam_size).contiguous().view(-1)))
-            state_c = state_c.unsqueeze(0)
+            # state_c = state_c.unsqueeze(0)
             state_o = Variable(beam_replicate(next_state[2].data, self.beam_size).index_select(
                 0, beam_parents.view(-1) + torch.arange(0, batch_size * beam_size, beam_size).long().cuda().contiguous().view(batch_size, 1).expand(batch_size, beam_size).contiguous().view(-1)))
             state = (state_h, state_c, state_o)
@@ -552,6 +598,164 @@ class AttentionDecoder(nn.Module):
 
         return results
 
+    def get_logprobs_state(self, it, context, state):
+        # 'it' is Variable contraining a word index
+        xt = self.embed(it)
+
+        output, state = self.core(
+            xt, context, state)
+        logprobs = F.log_softmax(self.logit(output))
+
+        return logprobs, state
+
+    def beam_search(self, state, logprobs, *args, **kwargs):
+        # args are the miscelleous inputs to the core in addition to embedded word and state
+        # kwargs only accept opt
+
+        def beam_step(logprobsf, beam_size, t, beam_seq, beam_seq_logprobs, beam_logprobs_sum, state):
+            #INPUTS:
+            #logprobsf: probabilities augmented after diversity
+            #beam_size: obvious
+            #t        : time instant
+            #beam_seq : tensor contanining the beams
+            #beam_seq_logprobs: tensor contanining the beam logprobs
+            #beam_logprobs_sum: tensor contanining joint logprobs
+            #OUPUTS:
+            #beam_seq : tensor containing the word indices of the decoded captions
+            #beam_seq_logprobs : log-probability of each decision made, same size as beam_seq
+            #beam_logprobs_sum : joint log-probability of each beam
+
+            ys, ix = torch.sort(logprobsf, 1, True)
+            candidates = []
+            cols = min(beam_size, ys.size(1))
+            rows = beam_size
+            if t == 0:
+                rows = 1
+            for c in range(cols):  # for each column (word, essentially)
+                for q in range(rows):  # for each beam expansion
+                    # compute logprob of expanding beam q with word in (sorted)
+                    # position c
+                    local_logprob = ys[q, c]
+                    candidate_logprob = beam_logprobs_sum[q] + local_logprob
+                    candidates.append(
+                        {'c': ix[q, c], 'q': q, 'p': candidate_logprob, 'r': local_logprob})
+            candidates = sorted(candidates,  key=lambda x: -x['p'])
+
+            new_state = [_.clone() for _ in state]
+            #beam_seq_prev, beam_seq_logprobs_prev
+            if t >= 1:
+                #we''ll need these as reference when we fork beams around
+                beam_seq_prev = beam_seq[:t].clone()
+                beam_seq_logprobs_prev = beam_seq_logprobs[:t].clone()
+            for vix in range(beam_size):
+                v = candidates[vix]
+                #fork beam index q into index vix
+                if t >= 1:
+                    beam_seq[:t, vix] = beam_seq_prev[:, v['q']]
+                    beam_seq_logprobs[:t,
+                                      vix] = beam_seq_logprobs_prev[:, v['q']]
+                #rearrange recurrent states
+                for state_ix in range(len(new_state)):
+                    #  copy over state in previous beam q to new beam at vix
+                    new_state[state_ix][:, vix] = state[state_ix][:,
+                                                                  v['q']]  # dimension one is time step
+                #append new end terminal at the end of this beam
+                beam_seq[t, vix] = v['c']  # c'th word is the continuation
+                beam_seq_logprobs[t, vix] = v['r']  # the raw logprob here
+                # the new (sum) logprob along this beam
+                beam_logprobs_sum[vix] = v['p']
+            state = new_state
+            return beam_seq, beam_seq_logprobs, beam_logprobs_sum, state, candidates
+
+        # start beam search
+        opt = kwargs['opt']
+        beam_size = opt.get('beam_size', 5)
+
+        beam_seq = torch.LongTensor(self.max_decoder_l, beam_size).zero_()
+        beam_seq_logprobs = torch.FloatTensor(
+            self.max_decoder_l, beam_size).zero_()
+        # running sum of logprobs for each beam
+        beam_logprobs_sum = torch.zeros(beam_size)
+        done_beams = []
+
+        for t in range(self.max_decoder_l):
+            """pem a beam merge. that is,
+            for every previous beam we now many new possibilities to branch out
+            we need to resort our beams to maintain the loop invariant of keeping
+            the top beam_size most likely sequences."""
+            logprobsf = logprobs.data.float(
+            )  # lets go to CPU for more efficiency in indexing operations
+            # suppress UNK tokens in the decoding
+            logprobsf[:, logprobsf.size(
+                1) - 1] = logprobsf[:, logprobsf.size(1) - 1] - 1000
+
+            beam_seq,\
+                beam_seq_logprobs,\
+                beam_logprobs_sum,\
+                state,\
+                candidates_divm = beam_step(logprobsf,
+                                            beam_size,
+                                            t,
+                                            beam_seq,
+                                            beam_seq_logprobs,
+                                            beam_logprobs_sum,
+                                            state)
+
+            for vix in range(beam_size):
+                # if time's up... or if end token is reached then copy beams
+                if beam_seq[t, vix] == 0 or beam_seq[t, vix] == self.eos or t == self.max_decoder_l - 1:
+                    final_beam = {
+                        'seq': beam_seq[:, vix].clone(),
+                        'logps': beam_seq_logprobs[:, vix].clone(),
+                        'p': beam_logprobs_sum[vix]
+                    }
+                    done_beams.append(final_beam)
+                    # don't continue beams from finished sequences
+                    beam_logprobs_sum[vix] = -1000
+
+            # encode as vectors
+            it = beam_seq[t]
+            logprobs, state = self.get_logprobs_state(
+                Variable(it.cuda()), *(args + (state,)))
+
+        done_beams = sorted(done_beams, key=lambda x: -x['p'])[:beam_size]
+        return done_beams
+
+    def sample_beam(self, context, opt={}):
+        batch_size = context.size(0)
+        beam_size = self.beam_size
+
+        # Project the attention feats first to reduce memory and computation
+        # comsumptions.
+
+        assert beam_size <= self.target_vocab_size + \
+            1, 'lets assume this for now, otherwise this corner case causes a few headaches down the road. can be dealt with in future if needed'
+        seq = torch.LongTensor(self.max_decoder_l, batch_size).zero_()
+        seqLogprobs = torch.FloatTensor(self.max_decoder_l, batch_size)
+        # lets process every image independently for now, for simplicity
+
+        self.done_beams = [[] for _ in range(batch_size)]
+        for k in range(batch_size):
+            state = self.init_hidden(beam_size)
+            tmp_fc_feats = context[k:k +1].expand(beam_size, context.size(1), context.size(2))
+
+            for t in range(1):
+                if t == 0:  # input <bos>
+                    it = context.data.new(beam_size).long().zero_().fill_(self.bos)
+                    xt = self.embed(Variable(it, requires_grad=False))
+
+                output, state = self.core(xt, tmp_fc_feats, state)
+                logprobs = F.log_softmax(self.logit(output))
+
+            self.done_beams[k] = self.beam_search(
+                state, logprobs, tmp_fc_feats, opt={'beam_size': beam_size})
+            # the first beam has highest cumulative score
+            seq[:, k] = self.done_beams[k][0]['seq']
+            seqLogprobs[:, k] = self.done_beams[k][0]['logps']
+        # return the samples and their log likelihoods
+        # return seq.transpose(0, 1), seqLogprobs.transpose(0, 1)
+        return seq.transpose(0, 1)
+
 
 class UI2codeAttention(nn.Module):
     def __init__(self, input_size ,num_hidden, num_layers=1):
@@ -560,12 +764,36 @@ class UI2codeAttention(nn.Module):
         input_size: target_embedding_size
         num_hidden: decoder_num_hidden
         """
-        self.lstm_cells = nn.ModuleList([nn.LSTMCell(input_size+num_hidden, num_hidden, bias=False) for _ in range(num_layers)])
+        self.lstm = nn.LSTMCell(input_size+num_hidden, num_hidden)
         self.hidden_mapping = nn.Linear(num_hidden, num_hidden, bias=False)
         self.output_mapping = nn.Linear(2*num_hidden, num_hidden, bias=False)
         self.num_layers = num_layers
         # self.input_mapping = nn.Linear(2*num_hidden, num_hidden)
     def forward(self, xt, context, prev_state):
+        """
+        xt shape: batch * input_size
+        context shape: batch * len(feature_map) * decoder_num_hidden
+        return:
+          context_output: batch_size * decoder_num_hidden
+          state: tuple of (ht, ct) each dim - num_layers * batch_size * decoder_num_hidden
+        """
+        prev_h = prev_state[0]
+        prev_c = prev_state[1]
+        input = torch.cat([xt, prev_state[2]],-1)
+        next_h, next_c = self.lstm(input, (prev_h, prev_c))
+
+            
+
+        top_h= next_h
+        mapped_h = self.hidden_mapping(top_h) ## batch * num_hidden
+        attn = torch.bmm(context, mapped_h.unsqueeze(2)) ## batch * len(feature) * 1
+        attn_weight = F.softmax(attn.squeeze(2)) ## batch * len(feature)
+        context_combined = torch.bmm(attn_weight.unsqueeze(1), context).squeeze(1) ## batch * num_hidden
+        context_output = F.tanh(self.output_mapping(torch.cat([context_combined, top_h], 1)))
+        
+        return context_output, (next_h, next_c, context_output)
+        
+    def vis(self, xt, context, prev_state):
         """
         xt shape: batch * input_size
         context shape: batch * len(feature_map) * decoder_num_hidden
@@ -579,7 +807,7 @@ class UI2codeAttention(nn.Module):
             prev_h = prev_state[0][L]
             prev_c = prev_state[1][L]
             if L == 0:
-                input = torch.cat([xt, prev_state[2]],-1)
+                input = torch.cat([xt, prev_state[2]], -1)
                 # prev_h = self.input_mapping(torch.cat((prev_h, prev_state[2]), -1))
 
             else:
@@ -587,15 +815,17 @@ class UI2codeAttention(nn.Module):
             next_h, next_c = self.lstm_cells[L](input, (prev_h, prev_c))
             hs.append(next_h)
             cs.append(next_c)
-            
 
-        top_h= hs[-1]
-        mapped_h = self.hidden_mapping(top_h) ## batch * num_hidden
-        attn = torch.bmm(context, mapped_h.unsqueeze(2)) ## batch * len(feature) * 1
-        attn_weight = F.softmax(attn.squeeze(2)) ## batch * len(feature)
-        context_combined = torch.bmm(attn_weight.unsqueeze(1), context).squeeze(1) ## batch * num_hidden
-        context_output = F.tanh(self.output_mapping(torch.cat([context_combined, top_h], 1)))
-        return context_output, (torch.stack(hs).contiguous(), torch.stack(cs).contiguous(), context_output)
+        top_h = hs[-1]
+        mapped_h = self.hidden_mapping(top_h)  # batch * num_hidden
+        attn = torch.bmm(context, mapped_h.unsqueeze(2)
+                         )  # batch * len(feature) * 1
+        attn_weight = F.softmax(attn.squeeze(2))  # batch * len(feature)
+        context_combined = torch.bmm(attn_weight.unsqueeze(
+            1), context).squeeze(1)  # batch * num_hidden
+        context_output = F.tanh(self.output_mapping(
+            torch.cat([context_combined, top_h], 1)))
+        return context_output, (torch.stack(hs).contiguous(), torch.stack(cs).contiguous(), context_output, attn_weight)
 
         
         
