@@ -31,9 +31,9 @@ class UI2codeDataset(data.Dataset):
         image = Image.open(os.path.join(self.root, 'processedImage', image_path)).convert('L')
         if self.transform is not None:
             image = self.transform(image)
-        skeleton = [self.vocab['<s>']]
+        skeleton = [self.opt.bos]
         skeleton.extend([self.vocab[t] if t in self.vocab else self.vocab['<unk>'] for t in label])
-        skeleton.append(self.vocab['</s>'])
+        skeleton.append(self.opt.eos)
         target = torch.Tensor(skeleton)
         return image, target
 
@@ -66,13 +66,12 @@ def collate_fn(data):
 
     # Merge captions (from tuple of 1D tensor to 2D tensor).
     lengths = [len(cap) for cap in captions]
-    masks = torch.zeros(len(captions), max(lengths))
+    num_non_zero = sum(lengths)
     targets = torch.zeros(len(captions), max(lengths)).long()
     for i, cap in enumerate(captions):
         end = lengths[i]
-        targets[i, :end] = cap[:end]
-        masks[i, :lengths[i]] = 1
-    return images, targets, masks
+        targets[i, :end] = cap
+    return images, targets, num_non_zero
 
 
 class UI2codeDataloader():

@@ -22,10 +22,10 @@ def validate(opt, loader, models):
     val_accuracy = []
     ted_val_accuracy = []
     encoderCNN, encoderRNN, decoder = models
-    for (images, captions, masks) in loader:
+    for (images, captions, num_nonzeros) in loader:
         images = Variable(images, requires_grad=False).cuda()
         captions = Variable(captions, requires_grad=False).cuda()
-        masks = Variable(masks, requires_grad=False).cuda()
+        # masks = Variable(masks, requires_grad=False).cuda()
         features = encoderCNN(images)
         encoded_features = encoderRNN(features)
         greedy_outputs = decoder.decode(encoded_features)
@@ -54,16 +54,25 @@ def train(opt):
     else:
         encoderRNN = EncoderRNN(opt)
     decoder = AttentionDecoder(opt)
+    if opt.start_from:
+        encoderCNN.load_state_dict(torch.load(os.path.join(
+            opt.start_from, 'encoder-cnn.pkl')))
+        encoderRNN.load_state_dict(torch.load(os.path.join(
+            opt.start_from, 'encoder-rnn.pkl')))
+        decoder.load_state_dict(torch.load(os.path.join(
+            opt.start_from, 'decoder.pkl')))
     if torch.cuda.is_available():
         encoderCNN.cuda()
         encoderRNN.cuda()
         decoder.cuda()
 
-    criterion = utils.LanguageModelCriterion()
-    params = list(decoder.parameters()) + \
-        list(encoderRNN.parameters()) + list(encoderCNN.parameters())
+    weight = torch.ones(opt.target_vocab_size).cuda()
+    weight[0] = 0
+    criterion = torch.nn.NLLLoss(weight=weight, size_average=False, re)
     opt.current_lr = opt.learning_rate
-    optimizer = torch.optim.SGD(params, lr=opt.current_lr)
+    optimizer_ec = torch.optim.SGD(encoderCNN.parameters(), lr=opt.current_lr)
+    optimizer_er = torch.optim.SGD(encoderRNN.parameters(), lr=opt.current_lr)
+    optimizer_de = torch.optim.SGD(decoder.parameters(), lr=opt.current_lr)
     total_steps = 0
     infos = {}
     histories = {}
@@ -76,25 +85,41 @@ def train(opt):
         epoch_iter = 0
         print('Epoch [%d/%d]' % (epoch + 1, opt.num_epochs))
         pbar = tqdm(data_loader)
-        for (images, captions, masks) in pbar:
+        if epoch > opt.scheduled_sampling_start and opt.scheduled_sampling_start >= 0:
+            frac = (epoch - opt.scheduled_sampling_start) // opt.scheduled_sampling_increase_every
+            opt.ss_prob = min(opt.scheduled_sampling_increase_prob  * frac, opt.scheduled_sampling_max_prob)
+            decoder.ss_prob = opt.ss_prob
+        for (images, captions, num_nonzeros) in pbar:
+            batch_size = captions.size(0)
             iter_start_time = time.time()
-            total_steps += opt.batch_size
+            total_steps += batch_size
             images = Variable(images, requires_grad=False).cuda()
             captions = Variable(captions, requires_grad=False).cuda()
-            masks = Variable(masks, requires_grad=False).cuda()
+            # masks = Variable(masks, requires_grad=False).cuda()
             # targets = pack_padded_sequence(captions, lengths, batch_first=True)[0]
             features = encoderCNN(images)
             encoded_features = encoderRNN(features)
             outputs = decoder(encoded_features, captions)
-            loss = criterion(outputs, captions[:,1:], masks[:,1:])
-            optimizer.zero_grad()
-            loss.backward()
+            loss = 0.0
+            optimizer_ec.zero_grad()
+            optimizer_er.zero_grad()
+            optimizer_de.zero_grad()
+            for t in range(captions.size(1)-1):
+                loss += criterion(outputs[:, t], captions[:, 1 + t]) / batch_size
+            
+            .backward()
+            utils.grad_clip(encoderCNN.named_parameters(), opt.norm_grad_clip)
+            utils.grad_clip(encoderRNN.named_parameters(), opt.norm_grad_clip)
+            utils.grad_clip(decoder.named_parameters(), opt.norm_grad_clip)
+            # print(loss.grad)
             # utils.grad_clip(params, opt.norm_grad_clip)
-            clip_grad_norm(params, opt.norm_grad_clip)
-            optimizer.step()
-            train_loss = loss.data[0]
+            # print(utils.parameters_to_vector([list(decoder.parameters())[-1]]).norm())
+            optimizer_ec.step()
+            optimizer_er.step()
+            optimizer_de.step()
+            train_loss = loss.data[0] * batch_size / num_nonzeros
             pbar.set_description('Loss: %.4f'
-                                 % (loss.data[0]))
+                                 % (train_loss))
             pbar.refresh()
             if total_steps % opt.print_freq == 0:
                 # print('Epoch [%d/%d], Step [%d/%d], Loss: %.4f'
@@ -133,7 +158,9 @@ def train(opt):
             opt.current_lr = max(opt.current_lr * opt.lr_decay,
                                 opt.learning_rate_min)
             print('update learning rate: %.4f' % (opt.current_lr))
-            utils.set_lr(optimizer, opt.current_lr)
+            utils.set_lr(optimizer_ec, opt.current_lr)
+            utils.set_lr(optimizer_er, opt.current_lr)
+            utils.set_lr(optimizer_de, opt.current_lr)
 
         print('validation accuracy: %.4f\nBest validation accuracy: %.4f' %
               (cur_val_accuracy, best_val_accuracy))

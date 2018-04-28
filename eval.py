@@ -40,13 +40,12 @@ def main(opt):
         decoder.cuda()
     accuracy_origin, accuracy_greedies, accuracy_tree = [], [], []
     average_lens = []
-    for (images, captions, masks) in tqdm(data_loader):
+    for (images, captions, num_nonzeros) in tqdm(data_loader):
         images = Variable(images, requires_grad=False).cuda()
-        masks = Variable(masks, requires_grad=False).cuda()
 
         features = encoderCNN(images)
         encoded_features = encoderRNN(features)
-        output_greedy = decoder.beam(encoded_features).cpu().numpy()
+        output_greedy = decoder.sample_beam(encoded_features).cpu().numpy()
         # beam_output, _ = decoder.decode_beam(encoded_features)
         # accuracy_beam = wordErrorRate(
         #     beam_output, captions[:, 1:], opt.eos)
