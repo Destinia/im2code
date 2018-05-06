@@ -17,7 +17,7 @@ def conv3x3(in_planes, out_planes, stride=1):
 class EncoderCNN(nn.Module):
     def __init__(self, opt):
         super(EncoderCNN, self).__init__()
-        model = [
+        self.models = [
             conv3x3(1, 64),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(kernel_size=2, stride=2, padding=0, ceil_mode=False),
@@ -38,9 +38,11 @@ class EncoderCNN(nn.Module):
             nn.BatchNorm2d(512),
             nn.ReLU(inplace=True)
         ]
-        self.model = nn.Sequential(*model)
+        self.model = nn.Sequential(*self.models)
 
     def forward(self, x):
+        # for l in self.models:
+        #     x = l(x)
         output = self.model(x) # batch * 512 * H * W
         output = output.permute(0, 2, 3, 1) # batch * H * W * 512
         # output = torch.unbind(output, 1) # len(H) list of (batch * W * 512)
@@ -60,13 +62,12 @@ class EncoderRNN(nn.Module):
         self.pos_embedding_bw = nn.Embedding(
             opt.max_encoder_l_h, self.n_layers * self.encoder_num_hidden * 2)
         self.lstm = nn.LSTM(
-            self.input_size, self.encoder_num_hidden, self.n_layers, bidirectional=True, bias=False, batch_first=True)
+            self.input_size, self.encoder_num_hidden, self.n_layers, bidirectional=True, batch_first=True)
 
     def forward(self, img_feats):
         """
         img_feature shape: batch * H * W * hidden_dim
         """
-        assert(len(img_feats) < self.max_encoder_l_h)
         imgH = img_feats.size(1)
         outputs = []
         for i in range(imgH):  # imgSeq height
@@ -94,52 +95,68 @@ class SpatialEncoderRNN(nn.Module):
         self.encoder_num_hidden = opt.encoder_num_hidden
         self.n_layers = opt.encoder_num_layers
         # 4* for bidirectional and (h, c)
-        self.pos_embedding_w = nn.Embedding(
+        self.pos_embedding_w_fw = nn.Embedding(
             opt.max_encoder_l_h, self.n_layers * self.encoder_num_hidden * 2)
-        self.pos_embedding_h = nn.Embedding(
+        self.pos_embedding_w_bw = nn.Embedding(
+            opt.max_encoder_l_h, self.n_layers * self.encoder_num_hidden * 2)
+        self.pos_embedding_h_fw = nn.Embedding(
+            opt.max_encoder_l_w, self.n_layers * self.encoder_num_hidden * 2)
+        self.pos_embedding_h_bw = nn.Embedding(
             opt.max_encoder_l_w, self.n_layers * self.encoder_num_hidden * 2)
         # self.pos_embedding_bw = nn.Embedding(
         #     opt.max_encoder_l_h, self.n_layers * self.encoder_num_hidden * 2)
         self.lstm_w = nn.LSTM(
-            self.input_size, self.encoder_num_hidden, self.n_layers, bidirectional=True)
+            self.input_size, self.encoder_num_hidden, self.n_layers, bidirectional=True, batch_first=True)
         self.lstm_h = nn.LSTM(
-            self.input_size, self.encoder_num_hidden, self.n_layers, bidirectional=True)
+            self.input_size, self.encoder_num_hidden, self.n_layers, bidirectional=True, batch_first=True)
         
     def forward(self, img_feats):
         """
         img_feature shape: batch * H * W * hidden_dim
         """
-        assert(len(img_feats) < self.max_encoder_l_h)
         imgH = img_feats.size(1)
         imgW = img_feats.size(2)
         outputs_w = []
         outputs_h = []
-        for i in range(imgH): # imgSeq height
+        for i in range(imgH):  # imgSeq height
             pos = Variable(torch.LongTensor(
-                [i] * img_feats.size(0)).zero_(), requires_grad=False).cuda().contiguous()  # batch * (num_layer * 2) * hidden_dim
+                [i] * img_feats.size(0)), requires_grad=False).cuda().contiguous()  # batch * (num_layer * 2) * hidden_dim
             # (num_layer * 2) * batch * hidden_dim
-            pos_embedding = self.pos_embedding_w(
-                pos).view(-1, 2 * self.n_layers, self.encoder_num_hidden).transpose(0, 1).contiguous()
-            source = img_feats[:, i].transpose(0, 1) # W * batch * hidden_dim
-            output, _ = self.lstm_w(source, (pos_embedding, pos_embedding))
-            outputs_w.extend(output)
-        for i in range(imgW): # imgSeq width
+            pos_embedding_fw_h, pos_embedding_fw_c = torch.unbind(self.pos_embedding_w_fw(
+                pos).view(-1, 2 * self.n_layers, self.encoder_num_hidden), 1)
+            pos_embedding_bw_h, pos_embedding_bw_c = torch.unbind(self.pos_embedding_w_bw(
+                pos).view(-1, 2 * self.n_layers, self.encoder_num_hidden), 1)
+            pos_embedding_h = torch.cat(
+                [pos_embedding_fw_h.unsqueeze(0), pos_embedding_bw_h.unsqueeze(0)], 0).contiguous()
+            pos_embedding_c = torch.cat(
+                [pos_embedding_fw_c.unsqueeze(0), pos_embedding_bw_c.unsqueeze(0)], 0).contiguous()
+            source = img_feats[:, i]  # batch * imgW * hidden_dim
+            output, _ = self.lstm_w(source, (pos_embedding_h, pos_embedding_c))
+            outputs_w.append(output)
+        for i in range(imgW):  # imgSeq height
             pos = Variable(torch.LongTensor(
-                [i] * img_feats.size(0)).zero_(), requires_grad=False).cuda().contiguous()  # batch * (num_layer * 2) * hidden_dim
+                [i] * img_feats.size(0)), requires_grad=False).cuda().contiguous()  # batch * (num_layer * 2) * hidden_dim
             # (num_layer * 2) * batch * hidden_dim
-            pos_embedding = self.pos_embedding_h(
-                pos).view(-1, 2 * self.n_layers, self.encoder_num_hidden).transpose(0, 1).contiguous()
-            source = img_feats[:, :, i].transpose(0, 1) # H * batch * hidden_dim
-            output, _ = self.lstm_h(source, (pos_embedding, pos_embedding))
-            outputs_h.append(output) # encoder_l * batch * num_hudden
-        outputs_w_t = torch.cat([_.unsqueeze(1) for _ in outputs_w], 1)
-        outputs_h_t = torch.stack(outputs_h, 1).view(
-            imgH * imgW, -1, self.encoder_num_hidden * 2 * self.n_layers).transpose(0, 1)
-        return torch.cat((outputs_w_t, outputs_h_t), -1)
+            pos_embedding_fw_h, pos_embedding_fw_c = torch.unbind(self.pos_embedding_h_fw(
+                pos).view(-1, 2 * self.n_layers, self.encoder_num_hidden), 1)
+            pos_embedding_bw_h, pos_embedding_bw_c = torch.unbind(self.pos_embedding_h_bw(
+                pos).view(-1, 2 * self.n_layers, self.encoder_num_hidden), 1)
+            pos_embedding_h = torch.cat(
+                [pos_embedding_fw_h.unsqueeze(0), pos_embedding_bw_h.unsqueeze(0)], 0).contiguous()
+            pos_embedding_c = torch.cat(
+                [pos_embedding_fw_c.unsqueeze(0), pos_embedding_bw_c.unsqueeze(0)], 0).contiguous()
+            source = img_feats[:, :, i]  # batch * imgW * hidden_dim
+            output, _ = self.lstm_h(source, (pos_embedding_h, pos_embedding_c))
+            outputs_h.append(output)
+        outputs_w_t = torch.cat([_.unsqueeze(1) for _ in outputs_w], 1) # batch * imgH * imgW * num_hidden
+        outputs_h_t = torch.cat([_.unsqueeze(1) for _ in outputs_h], 1).transpose(1, 2)
+
+        return torch.cat((outputs_w_t, outputs_h_t), -1).contiguous().view(-1, imgH*imgW, 4*self.encoder_num_hidden)
 
 class AttentionDecoder(nn.Module):
     def __init__(self, opt):
         super(AttentionDecoder, self).__init__()
+        self.context_num_hidden = opt.context_num_hidden
         self.decoder_num_hidden = opt.decoder_num_hidden
         self.decoder_num_layers = opt.decoder_num_layers
         self.target_vocab_size = opt.target_vocab_size ## dict size + 4
@@ -152,7 +169,7 @@ class AttentionDecoder(nn.Module):
         self.bos = opt.bos
         self.eos = opt.eos
         self.embed = nn.Embedding(self.target_vocab_size, self.target_embedding_size)
-        self.core = UI2codeAttention(self.target_embedding_size, self.decoder_num_hidden, self.decoder_num_layers)
+        self.core = UI2codeAttention(self.target_embedding_size, self.context_num_hidden, self.decoder_num_hidden, self.decoder_num_layers)
         self.logit = nn.Linear(self.decoder_num_hidden, self.target_vocab_size)
         self.ss_prob = 0.0
 
@@ -164,7 +181,7 @@ class AttentionDecoder(nn.Module):
                     Variable(weight.new(bsz, self.decoder_num_layers, self.decoder_num_hidden).zero_()))
         return (Variable(weight.new(bsz, self.decoder_num_hidden).zero_()),
                 Variable(weight.new(bsz, self.decoder_num_hidden).zero_()),
-                Variable(weight.new(bsz, self.decoder_num_hidden).zero_()))
+                Variable(weight.new(bsz, self.context_num_hidden).zero_()))
 
     def extract_model(self):
         models = dict()
@@ -561,23 +578,25 @@ class AttentionDecoder(nn.Module):
                 probs.select(1, 0).masked_fill_(beam_input.eq(0).data, 0.0)
                 # seq_len.masked_fill_((beam_input.eq(self.eos).data + seq_len.eq(1)).eq(2), t-1)
                 # # seq_len.masked_fill_(beam_input.eq(0).data, t-1)
-                total_scores = (probs.view(-1, beam_size, self.target_vocab_size) + beam_score.view(-1, beam_size, 1).expand(batch_size, beam_size, self.target_vocab_size)).contiguous().view(-1, beam_size * self.target_vocab_size)
+                total_scores = (probs.view(-1, beam_size, self.target_vocab_size) + beam_score.view(batch_size, beam_size, 1).expand(batch_size, beam_size, self.target_vocab_size)).contiguous().view(-1, beam_size * self.target_vocab_size)
 
                 beam_score, raw_indices = total_scores.topk(beam_size, -1)
                 current_indices = raw_indices.fmod(self.target_vocab_size)
             beam_parents = raw_indices/self.target_vocab_size
-            # if t < 10:
-            #     print(t, beam_score, beam_parents)
             beam_input = current_indices.view(-1)
             beam_parents_history.append(beam_parents.clone())
             current_indices_history.append(current_indices.clone())
-            state_h = Variable(beam_replicate(next_state[0].squeeze(0).data, self.beam_size).index_select(
+            ## replicate for first timestamp
+            if t == 0:
+                next_state = beam_replicate(next_state[0], beam_size), beam_replicate(next_state[1], beam_size), beam_replicate(next_state[2], beam_size)
+            
+            state_h = Variable(next_state[0].data.index_select(
                 0, beam_parents.view(-1) + torch.arange(0, batch_size * beam_size, beam_size).long().cuda().contiguous().view(batch_size, 1).expand(batch_size, beam_size).contiguous().view(-1)))
             # state_h = state_h.unsqueeze(0)
-            state_c = Variable(beam_replicate(next_state[1].squeeze(0).data, self.beam_size).index_select(
+            state_c = Variable(next_state[1].data.index_select(
                 0, beam_parents.view(-1) + torch.arange(0, batch_size * beam_size, beam_size).long().cuda().contiguous().view(batch_size, 1).expand(batch_size, beam_size).contiguous().view(-1)))
             # state_c = state_c.unsqueeze(0)
-            state_o = Variable(beam_replicate(next_state[2].data, self.beam_size).index_select(
+            state_o = Variable(next_state[2].data.index_select(
                 0, beam_parents.view(-1) + torch.arange(0, batch_size * beam_size, beam_size).long().cuda().contiguous().view(batch_size, 1).expand(batch_size, beam_size).contiguous().view(-1)))
             state = (state_h, state_c, state_o)
             
@@ -673,9 +692,9 @@ class AttentionDecoder(nn.Module):
 
         beam_seq = torch.LongTensor(self.max_decoder_l, beam_size).zero_()
         beam_seq_logprobs = torch.FloatTensor(
-            self.max_decoder_l, beam_size).zero_()
+            self.max_decoder_l, beam_size).zero_().cuda()
         # running sum of logprobs for each beam
-        beam_logprobs_sum = torch.zeros(beam_size)
+        beam_logprobs_sum = torch.zeros(beam_size).cuda()
         done_beams = []
 
         for t in range(self.max_decoder_l):
@@ -758,15 +777,15 @@ class AttentionDecoder(nn.Module):
 
 
 class UI2codeAttention(nn.Module):
-    def __init__(self, input_size ,num_hidden, num_layers=1):
+    def __init__(self, input_size, context_num_hidden, num_hidden, num_layers=1):
         super(UI2codeAttention, self).__init__()
         """
         input_size: target_embedding_size
         num_hidden: decoder_num_hidden
         """
-        self.lstm = nn.LSTMCell(input_size+num_hidden, num_hidden)
-        self.hidden_mapping = nn.Linear(num_hidden, num_hidden, bias=False)
-        self.output_mapping = nn.Linear(2*num_hidden, num_hidden, bias=False)
+        self.lstm = nn.LSTMCell(input_size + context_num_hidden, num_hidden)
+        self.hidden_mapping = nn.Linear(num_hidden, context_num_hidden, bias=False)
+        self.output_mapping = nn.Linear(context_num_hidden+num_hidden, num_hidden, bias=False)
         self.num_layers = num_layers
         # self.input_mapping = nn.Linear(2*num_hidden, num_hidden)
     def forward(self, xt, context, prev_state):

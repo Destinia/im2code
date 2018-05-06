@@ -22,21 +22,27 @@ def validate(opt, loader, models):
     val_accuracy = []
     ted_val_accuracy = []
     encoderCNN, encoderRNN, decoder = models
+    encoderCNN.eval()
+    encoderRNN.eval()
+    decoder.eval()
     for (images, captions, num_nonzeros) in loader:
         images = Variable(images, requires_grad=False).cuda()
         captions = Variable(captions, requires_grad=False).cuda()
         # masks = Variable(masks, requires_grad=False).cuda()
         features = encoderCNN(images)
         encoded_features = encoderRNN(features)
-        greedy_outputs = decoder.decode(encoded_features)
+        greedy_outputs = decoder.beam(encoded_features)
         greedy_outputs = greedy_outputs.cpu().numpy()
         gt = captions.data.cpu().numpy()[:, 1:]
         accuracy = wordErrorRate(
             greedy_outputs, gt, opt.eos)
         ted_accuracy = tree_distances_multithread(
-            greedy_outputs, gt[:, 1:])
+            greedy_outputs, gt)
         val_accuracy.append(accuracy)
         ted_val_accuracy.append(np.average(ted_accuracy))
+    encoderCNN.train()
+    encoderRNN.train()
+    decoder.train()
     return sum(val_accuracy) / len(val_accuracy), sum(ted_val_accuracy) / len(ted_val_accuracy)
 
 
@@ -107,9 +113,9 @@ def train(opt):
             for t in range(captions.size(1)-1):
                 loss += criterion(outputs[:, t], captions[:, 1 + t]) / batch_size
             loss.backward()
-            utils.grad_clip(encoderCNN.named_parameters(), opt.norm_grad_clip)
-            utils.grad_clip(encoderRNN.named_parameters(), opt.norm_grad_clip)
-            utils.grad_clip(decoder.named_parameters(), opt.norm_grad_clip)
+            utils.grad_clip(encoderCNN.parameters(), opt.norm_grad_clip)
+            utils.grad_clip(encoderRNN.parameters(), opt.norm_grad_clip)
+            utils.grad_clip(decoder.parameters(), opt.norm_grad_clip)
             # print(loss.grad)
             # utils.grad_clip(params, opt.norm_grad_clip)
             # print(utils.parameters_to_vector([list(decoder.parameters())[-1]]).norm())

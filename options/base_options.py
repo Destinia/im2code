@@ -57,7 +57,9 @@ class BaseOptions():
         self.opt.max_encoder_l_w = math.floor(self.opt.max_image_width / 8.0)
         self.opt.max_encoder_l_h = math.floor(self.opt.max_image_height / 8.0)
         self.opt.decoder_num_hidden = 2 * self.opt.encoder_num_hidden
+        self.opt.context_num_hidden = 2 * self.opt.encoder_num_hidden
         if self.opt.spatial:
+            self.opt.context_num_hidden = 4 * self.opt.encoder_num_hidden
             # double size decoder num_hidden
             self.opt.decoder_num_hidden = self.opt.decoder_num_hidden * 2
         self.opt.max_decoder_l = self.opt.max_num_tokens + 1
