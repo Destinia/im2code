@@ -4,12 +4,13 @@ from tqdm import tqdm
 from options.test_options import TestOptions
 from dataloader import UI2codeDataloader
 from torch.autograd import Variable
-
-from models.model import EncoderCNN, EncoderRNN, AttentionDecoder
+from torch.utils.serialization import load_lua
+from models.model import EncoderCNN, EncoderRNN, AttentionDecoder, SpatialEncoderRNN
 import pickle
 from eval_utils import wordErrorRate, tree_distances_multithread, wordErrorRateOrigin
 import time
 import numpy as np
+from load_lua_model import load_encoderRNN
 
 def test_len(tokens):
     l = 0
@@ -25,7 +26,10 @@ def main(opt):
     dataset = data_loader.load_data()
     dataset_size = len(data_loader)
     encoderCNN = EncoderCNN(opt)
-    encoderRNN = EncoderRNN(opt)
+    if opt.spatial:
+        encoderRNN = SpatialEncoderRNN(opt)
+    else:
+        encoderRNN = EncoderRNN(opt)
     decoder = AttentionDecoder(opt)
     encoderCNN.load_state_dict(torch.load(os.path.join(
         opt.results_dir, 'encoder-cnn-%s.pkl' % (opt.model_name))))
@@ -34,6 +38,9 @@ def main(opt):
     decoder.load_state_dict(torch.load(os.path.join(
         opt.results_dir, 'decoder-%s.pkl' % (opt.model_name))))
 
+    encoderCNN.eval()
+    encoderRNN.eval()
+    decoder.eval()
     if torch.cuda.is_available():
         encoderCNN.cuda()
         encoderRNN.cuda()
@@ -42,10 +49,10 @@ def main(opt):
     average_lens = []
     for (images, captions, num_nonzeros) in tqdm(data_loader):
         images = Variable(images, requires_grad=False).cuda()
-
+        # pre_feat = encoderCNN_lua.forward(images)
         features = encoderCNN(images)
         encoded_features = encoderRNN(features)
-        output_greedy = decoder.sample_beam(encoded_features).cpu().numpy()
+        output_greedy = decoder.beam(encoded_features).cpu().numpy()
         # beam_output, _ = decoder.decode_beam(encoded_features)
         # accuracy_beam = wordErrorRate(
         #     beam_output, captions[:, 1:], opt.eos)

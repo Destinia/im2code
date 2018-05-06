@@ -78,11 +78,37 @@ def build_tree(seq):
             return root
     return root
 
+def build_tree_gt(seq):
+    root = Node('root')
+    hierarchy = [root, None]  # 0 for parent 1 for current node
+    for t in seq:
+        token = chr(t)
+        if t == OPEN:
+            hierarchy.append(None)
+            continue
+        if t == CLOSE:
+            del hierarchy[-1]
+            if len(hierarchy) < 2:
+                return root
+            continue
+        if t == EOS:
+            break
+        newNode = Node(token)
+        hierarchy[-2].addkid(newNode)
+        hierarchy[-1] = newNode
+    return root
+
 def tree_distance(r, t):
-    return 1 - min(1, simple_distance(build_tree(r), build_tree(t)) / len(t))
+    if type(t) is list:
+        tl = t
+    else:
+        tl = t.tolist()
+        
+    length = tl.index(EOS) - tl.count(OPEN)*2
+    return 1 - min(1, simple_distance(build_tree(r), build_tree_gt(t)) / length)
 
 def tree_distances_multithread(results, targets):
     with Pool(processes=8) as pool:
         tree_distance_all = pool.starmap(tree_distance, zip(results, targets))
-    
+    # tree_distance_all = [tree_distance(r, t) for r, t in zip(results, targets)]
     return np.array(tree_distance_all)

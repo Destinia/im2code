@@ -28,6 +28,9 @@ class UI2codeDataset(data.Dataset):
     def __getitem__(self, index):
         image_path = self.image_paths[self.ids[index]]
         label = self.labels[self.ids[index]]
+        # image = Image.open(os.path.join(self.root, 'processedImage', image_path))
+        # image = np.dot(np.asarray(image, dtype=np.float32), [0.299, 0.5870, 0.1140])
+        # image = torch.from_numpy(image).unsqueeze(0).float()
         image = Image.open(os.path.join(self.root, 'processedImage', image_path)).convert('L')
         if self.transform is not None:
             image = self.transform(image)
