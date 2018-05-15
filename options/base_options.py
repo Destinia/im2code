@@ -89,6 +89,8 @@ class BaseOptions():
         self.opt.eos = self.opt.vocab['</s>']
         self.opt.opening_tag = '{'
         self.opt.closing_tag = '}'
+        self.opt.opening_index = self.opt.vocab['{']
+        self.opt.closing_index = self.opt.vocab['}']
         # save to the disk
         self.opt.expr_dir = os.path.join(self.opt.checkpoint_path, self.opt.name)
         util.mkdirs(self.opt.expr_dir)
