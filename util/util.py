@@ -7,7 +7,8 @@ from torch.nn.utils import clip_grad_norm
 import torch.nn as nn
 from torch.autograd import Variable
 import os
-
+import struct
+import imghdr
 
 # Converts a Tensor into a Numpy array
 # |imtype|: the desired type of the converted numpy array
@@ -30,6 +31,7 @@ def diagnose_network(net, name='network'):
         mean = mean / count
     print(name)
     print(mean)
+
 
 
 def save_image(image_numpy, image_path):
@@ -80,23 +82,16 @@ def get_rev_vocab(opt):
             vocab.append(line.strip())
     return vocab
 
-def get_images(opt, phase):
+def get_images(data_path):
     images = list()
-    data_path = ''
-    if phase == 'train':
-        data_path=opt.train_data_path
-    elif phase == 'val':
-        data_path=opt.val_data_path
-    elif phase == 'test':
-        data_path=opt.test_data_path
     with open(data_path) as f:
         lines = [line.strip().split() for line in f.readlines()]
         images = {int(line[1]):line[0] for line in lines}
     return images
 
 
-def get_labels(opt):
-    with open(opt.label_path) as f:
+def get_labels(path):
+    with open(path) as f:
         return [f.split() for f in f.readlines()]
    
 
@@ -344,3 +339,39 @@ def _check_param_device(param, old_param_device):
             raise TypeError('Found two parameters on different devices, '
                             'this is currently not supported.')
     return old_param_device
+
+
+def get_image_size(fname):
+    '''Determine the image type of fhandle and return its size.
+    from draco'''
+    with open(fname, 'rb') as fhandle:
+        head = fhandle.read(24)
+        if len(head) != 24:
+            return
+        if imghdr.what(fname) == 'png':
+            check = struct.unpack('>i', head[4:8])[0]
+            if check != 0x0d0a1a0a:
+                return
+            width, height = struct.unpack('>ii', head[16:24])
+        elif imghdr.what(fname) == 'gif':
+            width, height = struct.unpack('<HH', head[6:10])
+        elif imghdr.what(fname) == 'jpeg':
+            try:
+                fhandle.seek(0)  # Read 0xff next
+                size = 2
+                ftype = 0
+                while not 0xc0 <= ftype <= 0xcf:
+                    fhandle.seek(size, 1)
+                    byte = fhandle.read(1)
+                    while ord(byte) == 0xff:
+                        byte = fhandle.read(1)
+                    ftype = ord(byte)
+                    size = struct.unpack('>H', fhandle.read(2))[0] - 2
+                # We are at a SOFn block
+                fhandle.seek(1, 1)  # Skip `precision' byte.
+                height, width = struct.unpack('>HH', fhandle.read(4))
+            except Exception:  # IGNORE:W0703
+                return
+        else:
+            return
+        return width, height

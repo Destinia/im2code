@@ -11,6 +11,8 @@ from eval_utils import wordErrorRate, tree_distances_multithread, wordErrorRateO
 import time
 import numpy as np
 from load_lua_model import load_encoderRNN
+from models.AdaModel import AdaDecoder
+from models.resnet import resnet18
 
 def test_len(tokens):
     l = 0
@@ -25,7 +27,7 @@ def main(opt):
     opt.target_vocab_size = len(opt.vocab)
     dataset = data_loader.load_data()
     dataset_size = len(data_loader)
-    encoderCNN = EncoderCNN(opt)
+    encoderCNN = resnet18()
     if opt.spatial:
         encoderRNN = SpatialEncoderRNN(opt)
     else:
@@ -49,7 +51,6 @@ def main(opt):
     average_lens = []
     for (images, captions, num_nonzeros) in tqdm(data_loader):
         images = Variable(images, requires_grad=False).cuda()
-        # pre_feat = encoderCNN_lua.forward(images)
         features = encoderCNN(images)
         encoded_features = encoderRNN(features)
         output_greedy = decoder.beam(encoded_features).cpu().numpy()
@@ -68,7 +69,7 @@ def main(opt):
         # tree_distance_beam = treeEval.distance(beam_output, captions.data[:, 1:])
         # start_time = time.time()
         accuracy_tree.append(np.average(tree_distances_multithread(
-            output_greedy, captions[:, 1:])))
+            output_greedy.tolist(), captions[:, 1:].tolist(), opt)))
 
         ## save for test
         avg_l = [test_len(r) for r in output_greedy]
