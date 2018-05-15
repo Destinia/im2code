@@ -1,5 +1,5 @@
 from options.train_options import TrainOptions
-from dataloader import UI2codeDataloader
+from dataloader import UI2codeDataloader, Image2latexDataloader
 
 import numpy as np
 import math
@@ -13,10 +13,17 @@ from torch.autograd import Variable
 from torch.nn.utils import clip_grad_norm
 from torch.nn.utils.rnn import pack_padded_sequence
 from models.model import EncoderCNN, EncoderRNN, AttentionDecoder, SpatialEncoderRNN
+from models.AdaModel import AdaDecoder
+from models.resnet import resnet18, resnet101
 import util.util as utils
 from eval_utils import wordErrorRate, tree_distances_multithread
 from tensorboardX import SummaryWriter
+import torch.nn.init as inits
 
+
+def weight_init(model):
+    for p in model.parameters():
+        inits.uniform_(p.data, -0.05, 0.05)
 
 def validate(opt, loader, models):
     val_accuracy = []
@@ -37,7 +44,7 @@ def validate(opt, loader, models):
         accuracy = wordErrorRate(
             greedy_outputs, gt, opt.eos)
         ted_accuracy = tree_distances_multithread(
-            greedy_outputs, gt)
+            greedy_outputs, gt, opt)
         val_accuracy.append(accuracy)
         ted_val_accuracy.append(np.average(ted_accuracy))
     encoderCNN.train()
@@ -47,8 +54,8 @@ def validate(opt, loader, models):
 
 
 def train(opt):
-    data_loader = UI2codeDataloader(opt)
-    val_data_loader = UI2codeDataloader(opt, phase='val')
+    data_loader = Image2latexDataloader(opt)
+    val_data_loader = Image2latexDataloader(opt, phase='val')
     dataset = data_loader.load_data()
     writer = SummaryWriter(opt.expr_dir)
 
@@ -67,6 +74,10 @@ def train(opt):
             opt.start_from, 'encoder-rnn.pkl')))
         decoder.load_state_dict(torch.load(os.path.join(
             opt.start_from, 'decoder.pkl')))
+    else:
+        weight_init(encoderCNN)
+        weight_init(encoderRNN)
+        weight_init(decoder)
     if torch.cuda.is_available():
         encoderCNN.cuda()
         encoderRNN.cuda()
